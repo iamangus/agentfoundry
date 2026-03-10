@@ -33,10 +33,11 @@ export OPENROUTER_API_KEY="sk-or-..."
 docker build -t agentfile .
 docker run -p 3000:3000 \
   -e OPENROUTER_API_KEY="sk-or-..." \
-  -v $(pwd)/definitions:/app/definitions \
-  -v $(pwd)/agentfile.yaml:/app/agentfile.yaml \
+  -v $(pwd)/data:/data \
   agentfile
 ```
+
+The container stores all persistent data under `/data` (definitions and config). Mount a volume or bind-mount there to persist agent definitions and provide your own `agentfile.yaml`. The default definitions are baked into the image at `/data/definitions/`.
 
 ## Configuration
 

@@ -12,11 +12,11 @@ FROM alpine:3.21
 
 RUN apk add --no-cache ca-certificates
 
-WORKDIR /app
+COPY --from=builder /agentfile /usr/local/bin/agentfile
+COPY definitions/ /data/definitions/
 
-COPY --from=builder /agentfile /app/agentfile
-COPY definitions/ /app/definitions/
+WORKDIR /data
 
 EXPOSE 3000
 
-ENTRYPOINT ["/app/agentfile"]
+ENTRYPOINT ["agentfile"]
