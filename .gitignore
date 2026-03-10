@@ -1,0 +1,34 @@
+# Compiled binary (go build -o agentfile ./cmd/agentfile/)
+/agentfile
+
+# Runtime config (may contain secrets; use agentfile.example.yaml as template)
+agentfile.yaml
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+
+# Coverage
+*.coverprofile
+coverage.out
+
+# Environment files
+.env
+.env.*
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
