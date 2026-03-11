@@ -12,7 +12,48 @@
   <script type="module" src="https://cdn.jsdelivr.net/npm/franken-ui@2.1.0/dist/js/core.iife.js"></script>
   <style>
     html, body { height: 100%; margin: 0; }
-    .page-body { flex: 1; display: flex; overflow: hidden; height: calc(100vh - 49px); }
+    .page-body { flex: 1; display: flex; overflow: hidden; height: calc(100vh - 52px); }
+
+    /* Sidebar agent row */
+    .agent-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 10px;
+      margin: 2px 6px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.15s;
+      text-decoration: none;
+      color: inherit;
+    }
+    .agent-row:hover { background: hsl(var(--muted) / 0.6); }
+    .agent-row.active { background: hsl(var(--muted)); }
+
+    .agent-row .del-btn {
+      opacity: 0;
+      transition: opacity 0.15s;
+      flex-shrink: 0;
+    }
+    .agent-row:hover .del-btn { opacity: 1; }
+
+    /* YAML editor */
+    .yaml-editor {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      resize: none;
+      flex: 1;
+      border-radius: 8px;
+      padding: 12px 14px;
+    }
+
+    /* Save status fade */
+    .save-status {
+      font-size: 12px;
+      color: hsl(var(--muted-foreground));
+      transition: opacity 0.3s;
+    }
   </style>
 </head>
 <body class="bg-background text-foreground flex flex-col min-h-screen">
@@ -21,11 +62,12 @@
 
 <div class="page-body">
   <!-- Agent list sidebar -->
-  <aside class="w-64 border-r flex flex-col shrink-0 overflow-hidden">
-    <div class="p-3 border-b flex items-center justify-between gap-2">
-      <span class="text-sm font-semibold">Agents</span>
+  <aside class="w-60 border-r flex flex-col shrink-0 overflow-hidden bg-background">
+    <div class="px-3 py-3 border-b flex items-center justify-between gap-2">
+      <span class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Agents</span>
       <button
-        class="uk-button uk-button-primary uk-button-small"
+        class="uk-button uk-button-primary uk-button-small text-xs"
+        style="padding: 2px 10px; border-radius: 6px;"
         uk-toggle="target: #create-agent-modal"
       >
         + New
@@ -37,7 +79,7 @@
   </aside>
 
   <!-- Editor panel -->
-  <main class="flex-1 flex flex-col overflow-hidden">
+  <main class="flex-1 flex flex-col overflow-hidden bg-background">
     <div id="agent-editor" class="flex-1 flex flex-col h-full">
       {{template "agent-editor-empty" .}}
     </div>
@@ -46,50 +88,84 @@
 
 <!-- Create Agent Modal -->
 <div id="create-agent-modal" uk-modal>
-  <div class="uk-modal-dialog uk-modal-body" style="max-width: 560px;">
-    <h2 class="uk-modal-title text-base font-semibold mb-4">Create Agent</h2>
-    <div class="uk-margin">
-      <label class="uk-form-label">Name <span class="text-destructive">*</span></label>
-      <input id="new-name" type="text" class="uk-input" placeholder="my-agent" required />
+  <div class="uk-modal-dialog uk-modal-body" style="max-width: 540px; border-radius: 12px;">
+    <h2 class="uk-modal-title text-base font-semibold mb-5">New Agent</h2>
+
+    <div class="uk-margin-small">
+      <label class="uk-form-label text-xs font-medium text-muted-foreground uppercase tracking-wide">
+        Name <span class="text-destructive">*</span>
+      </label>
+      <input id="new-name" type="text" class="uk-input mt-1" placeholder="my-agent" required
+        style="border-radius: 6px;" />
     </div>
-    <div class="uk-margin">
-      <label class="uk-form-label">Description</label>
-      <input id="new-description" type="text" class="uk-input" placeholder="What does this agent do?" />
+
+    <div class="uk-margin-small">
+      <label class="uk-form-label text-xs font-medium text-muted-foreground uppercase tracking-wide">
+        Description
+      </label>
+      <input id="new-description" type="text" class="uk-input mt-1" placeholder="What does this agent do?"
+        style="border-radius: 6px;" />
     </div>
-    <div class="uk-margin">
-      <label class="uk-form-label">Model</label>
-      <input id="new-model" type="text" class="uk-input" placeholder="openai/gpt-4o" />
+
+    <div class="uk-margin-small">
+      <label class="uk-form-label text-xs font-medium text-muted-foreground uppercase tracking-wide">
+        Model
+      </label>
+      <input id="new-model" type="text" class="uk-input mt-1" placeholder="openai/gpt-4o"
+        style="border-radius: 6px;" />
     </div>
-    <div class="uk-margin">
-      <label class="uk-form-label">System Prompt <span class="text-destructive">*</span></label>
-      <textarea id="new-system-prompt" class="uk-textarea" rows="5" placeholder="You are a helpful assistant..." required></textarea>
+
+    <div class="uk-margin-small">
+      <label class="uk-form-label text-xs font-medium text-muted-foreground uppercase tracking-wide">
+        System Prompt <span class="text-destructive">*</span>
+      </label>
+      <textarea id="new-system-prompt" class="uk-textarea mt-1" rows="4"
+        placeholder="You are a helpful assistant..." required
+        style="border-radius: 6px; font-size: 13px; resize: vertical;"></textarea>
     </div>
-    <div class="uk-margin">
-      <label class="uk-form-label">Tools <span class="text-muted-foreground text-xs">(one per line, e.g. srvd.my_tool)</span></label>
-      <textarea id="new-tools" class="uk-textarea" rows="3" placeholder="srvd.web_search&#10;other-agent"></textarea>
+
+    <div class="uk-margin-small">
+      <label class="uk-form-label text-xs font-medium text-muted-foreground uppercase tracking-wide">
+        Tools
+        <span class="normal-case font-normal text-muted-foreground ml-1">(one per line)</span>
+      </label>
+      <textarea id="new-tools" class="uk-textarea mt-1" rows="3"
+        placeholder="srvd.web_search&#10;other-agent"
+        style="border-radius: 6px; font-size: 13px; font-family: ui-monospace, monospace; resize: vertical;"></textarea>
     </div>
-    <div class="uk-margin">
-      <label class="uk-form-label">Max Turns</label>
-      <input id="new-max-turns" type="number" class="uk-input" placeholder="10" min="1" />
+
+    <div class="uk-margin-small">
+      <label class="uk-form-label text-xs font-medium text-muted-foreground uppercase tracking-wide">
+        Max Turns
+      </label>
+      <input id="new-max-turns" type="number" class="uk-input mt-1" placeholder="10" min="1"
+        style="border-radius: 6px; max-width: 120px;" />
     </div>
-    <div id="create-error" class="text-destructive text-sm hidden mt-2"></div>
-    <div class="flex justify-end gap-2 mt-4">
-      <button type="button" class="uk-button uk-button-default uk-modal-close">Cancel</button>
-      <button type="button" class="uk-button uk-button-primary" onclick="createAgent()">Create</button>
+
+    <div id="create-error" class="text-destructive text-xs hidden mt-3 p-3 rounded-lg bg-destructive/10"></div>
+
+    <div class="flex justify-end gap-2 mt-5">
+      <button type="button" class="uk-button uk-button-default uk-modal-close"
+        style="border-radius: 6px;">Cancel</button>
+      <button type="button" class="uk-button uk-button-primary" onclick="createAgent()"
+        style="border-radius: 6px;">Create Agent</button>
     </div>
   </div>
 </div>
 
 <!-- Confirm Delete Modal -->
 <div id="delete-confirm-modal" uk-modal>
-  <div class="uk-modal-dialog uk-modal-body" style="max-width: 400px;">
+  <div class="uk-modal-dialog uk-modal-body" style="max-width: 380px; border-radius: 12px;">
     <h2 class="uk-modal-title text-base font-semibold mb-2">Delete Agent</h2>
-    <p class="text-sm text-muted-foreground mb-4">
-      Are you sure you want to delete <strong id="delete-agent-name"></strong>? This will permanently remove the file from disk.
+    <p class="text-sm text-muted-foreground mb-5 leading-relaxed">
+      Are you sure you want to delete <strong id="delete-agent-name" class="text-foreground"></strong>?
+      This permanently removes the file from disk.
     </p>
     <div class="flex justify-end gap-2">
-      <button type="button" class="uk-button uk-button-default uk-modal-close">Cancel</button>
-      <button id="delete-confirm-btn" type="button" class="uk-button uk-button-danger" onclick="confirmDelete()">Delete</button>
+      <button type="button" class="uk-button uk-button-default uk-modal-close"
+        style="border-radius: 6px;">Cancel</button>
+      <button id="delete-confirm-btn" type="button" class="uk-button uk-button-danger" onclick="confirmDelete()"
+        style="border-radius: 6px;">Delete</button>
     </div>
   </div>
 </div>
@@ -130,7 +206,9 @@ function createAgent() {
     }
     UIkit.modal('#create-agent-modal').hide();
     htmx.ajax('GET', '/agents/list', { target: '#agent-list', swap: 'innerHTML' });
-    document.getElementById('agent-editor').innerHTML = '<div class="flex-1 flex items-center justify-center h-full text-muted-foreground"><p class="text-sm">Agent created. Select it from the list to edit.</p></div>';
+    document.getElementById('agent-editor').innerHTML =
+      '<div class="flex-1 flex items-center justify-center h-full text-muted-foreground">' +
+      '<p class="text-sm">Agent created. Select it from the list to edit.</p></div>';
   });
 }
 
@@ -147,7 +225,9 @@ function confirmDelete() {
       UIkit.modal('#delete-confirm-modal').hide();
       pendingDeleteName = null;
       htmx.ajax('GET', '/agents/list', { target: '#agent-list', swap: 'innerHTML' });
-      document.getElementById('agent-editor').innerHTML = '<div class="flex-1 flex items-center justify-center h-full text-muted-foreground"><p class="text-sm">Select an agent to edit.</p></div>';
+      document.getElementById('agent-editor').innerHTML =
+        '<div class="flex-1 flex items-center justify-center h-full text-muted-foreground">' +
+        '<p class="text-sm">Select an agent to edit.</p></div>';
     });
 }
 
@@ -160,7 +240,7 @@ function saveYaml(name) {
     body: yaml,
   }).then(r => r.json()).then(data => {
     if (data.status === 'updated') {
-      statusEl.textContent = 'Saved.';
+      statusEl.textContent = 'Saved';
       htmx.ajax('GET', '/agents/list', { target: '#agent-list', swap: 'innerHTML' });
     } else {
       statusEl.textContent = 'Error: ' + (data.error || 'unknown');
@@ -180,53 +260,66 @@ function saveYaml(name) {
   hx-get="/agents/{{.Name}}/edit"
   hx-target="#agent-editor"
   hx-swap="innerHTML"
-  class="flex items-center justify-between px-3 py-2 hover:bg-muted/50 cursor-pointer rounded mx-1 group"
+  class="agent-row"
 >
-  <div class="flex flex-col min-w-0">
+  <div class="flex flex-col min-w-0 flex-1">
     <span class="text-sm font-medium truncate">{{.Name}}</span>
-    {{if .Description}}<span class="text-xs text-muted-foreground truncate">{{.Description}}</span>{{end}}
+    {{if .Description}}
+    <span class="text-xs text-muted-foreground truncate mt-0.5">{{.Description}}</span>
+    {{end}}
   </div>
   <button
-    class="uk-button uk-button-danger uk-button-small opacity-0 group-hover:opacity-100 shrink-0 ml-2 text-xs"
-    style="padding: 0 6px;"
+    class="del-btn uk-button uk-button-danger uk-button-small text-xs ml-2"
+    style="padding: 1px 8px; border-radius: 5px;"
     onclick="event.preventDefault(); event.stopPropagation(); openDeleteModal('{{.Name}}')"
   >Del</button>
 </a>
 {{else}}
-<p class="text-xs text-muted-foreground px-3 py-2">No agents defined yet.</p>
+<div class="px-4 py-8 text-center">
+  <p class="text-xs text-muted-foreground">No agents yet.</p>
+  <p class="text-xs text-muted-foreground mt-1">Click <strong>+ New</strong> to create one.</p>
+</div>
 {{end}}
 {{end}}
 
 {{define "agent-editor-empty"}}
-<div class="flex-1 flex items-center justify-center h-full text-muted-foreground">
-  <div class="text-center">
-    <p class="text-lg font-medium mb-2">No agent selected</p>
-    <p class="text-sm">Select an agent from the list or create a new one.</p>
+<div class="flex-1 flex items-center justify-center h-full">
+  <div class="text-center max-w-xs">
+    <div class="text-muted-foreground/30 text-5xl mb-4">⬡</div>
+    <p class="text-sm font-medium text-foreground mb-1">No agent selected</p>
+    <p class="text-xs text-muted-foreground">
+      Pick an agent from the sidebar, or create a new one.
+    </p>
   </div>
 </div>
 {{end}}
 
 {{define "agent-editor"}}
 <div class="flex flex-col h-full">
-  <div class="flex items-center justify-between px-4 py-3 border-b shrink-0">
-    <h2 class="text-base font-semibold">{{.Name}}</h2>
+  <!-- Editor header -->
+  <div class="flex items-center justify-between px-5 py-3 border-b shrink-0">
+    <div class="flex items-center gap-2">
+      <h2 class="text-sm font-semibold">{{.Name}}</h2>
+      <span class="text-xs text-muted-foreground border rounded px-1.5 py-0.5" style="border-radius: 4px;">YAML</span>
+    </div>
     <div class="flex items-center gap-3">
-      <span id="save-status-{{.Name}}" class="text-xs text-muted-foreground"></span>
+      <span id="save-status-{{.Name}}" class="save-status"></span>
       <button
         type="button"
         class="uk-button uk-button-primary uk-button-small"
         onclick="saveYaml('{{.Name}}')"
+        style="border-radius: 6px; font-size: 12px; padding: 4px 14px;"
       >
         Save
       </button>
     </div>
   </div>
 
+  <!-- YAML textarea -->
   <div class="flex-1 flex flex-col p-4 gap-2 overflow-hidden">
-    <label class="text-xs text-muted-foreground font-medium">YAML definition</label>
     <textarea
       id="yaml-editor-{{.Name}}"
-      class="uk-textarea font-mono text-sm flex-1 resize-none"
+      class="uk-textarea yaml-editor"
       spellcheck="false"
     >{{.RawYAML}}</textarea>
   </div>

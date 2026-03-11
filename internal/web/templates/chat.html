@@ -12,7 +12,105 @@
   <script type="module" src="https://cdn.jsdelivr.net/npm/franken-ui@2.1.0/dist/js/core.iife.js"></script>
   <style>
     html, body { height: 100%; margin: 0; }
-    .page-body { flex: 1; display: flex; overflow: hidden; height: calc(100vh - 49px); }
+    .page-body { flex: 1; display: flex; overflow: hidden; height: calc(100vh - 52px); }
+
+    /* Sidebar session row */
+    .session-row {
+      display: flex;
+      flex-direction: column;
+      padding: 8px 10px;
+      margin: 2px 6px;
+      border-radius: 8px;
+      cursor: pointer;
+      text-decoration: none;
+      color: inherit;
+      transition: background 0.15s;
+    }
+    .session-row:hover { background: hsl(var(--muted) / 0.6); }
+    .session-row.active { background: hsl(var(--muted)); }
+
+    /* Message bubbles */
+    .msg-user {
+      background: hsl(var(--primary));
+      color: hsl(var(--primary-foreground));
+      border-radius: 18px 18px 4px 18px;
+      padding: 10px 14px;
+      max-width: 72%;
+      font-size: 14px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .msg-assistant {
+      background: hsl(var(--muted));
+      color: hsl(var(--foreground));
+      border-radius: 18px 18px 18px 4px;
+      padding: 10px 14px;
+      max-width: 72%;
+      font-size: 14px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    /* Thinking indicator */
+    @keyframes blink { 0%,100%{opacity:.3} 50%{opacity:1} }
+    .thinking span {
+      display: inline-block;
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: hsl(var(--muted-foreground));
+      margin: 0 2px;
+      animation: blink 1.2s infinite;
+    }
+    .thinking span:nth-child(2) { animation-delay: 0.2s; }
+    .thinking span:nth-child(3) { animation-delay: 0.4s; }
+
+    /* Send input */
+    .chat-input-area {
+      border-top: 1px solid hsl(var(--border));
+      padding: 12px 16px;
+      background: hsl(var(--background));
+    }
+    .chat-input-wrap {
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+      background: hsl(var(--muted) / 0.5);
+      border: 1px solid hsl(var(--border));
+      border-radius: 12px;
+      padding: 6px 6px 6px 14px;
+      transition: border-color 0.15s;
+    }
+    .chat-input-wrap:focus-within {
+      border-color: hsl(var(--primary));
+    }
+    .chat-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      font-size: 14px;
+      color: hsl(var(--foreground));
+      resize: none;
+      max-height: 120px;
+      line-height: 1.5;
+      padding: 4px 0;
+    }
+    .chat-input::placeholder { color: hsl(var(--muted-foreground)); }
+    .send-btn {
+      flex-shrink: 0;
+      width: 34px; height: 34px;
+      border-radius: 8px;
+      border: none;
+      background: hsl(var(--primary));
+      color: hsl(var(--primary-foreground));
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: opacity 0.15s;
+    }
+    .send-btn:hover { opacity: 0.85; }
+    .send-btn svg { width: 16px; height: 16px; }
   </style>
 </head>
 <body class="bg-background text-foreground flex flex-col min-h-screen">
@@ -21,9 +119,13 @@
 
 <div class="page-body">
   <!-- Sidebar -->
-  <aside class="w-64 border-r flex flex-col shrink-0 overflow-hidden">
-    <div class="p-3 border-b">
-      <button class="uk-button uk-button-primary w-full" uk-toggle="target: #new-chat-modal">
+  <aside class="w-60 border-r flex flex-col shrink-0 overflow-hidden bg-background">
+    <div class="px-3 py-3 border-b">
+      <button
+        class="uk-button uk-button-primary w-full text-sm"
+        style="border-radius: 8px; padding: 7px 12px;"
+        uk-toggle="target: #new-chat-modal"
+      >
         + New Chat
       </button>
     </div>
@@ -40,8 +142,8 @@
 
 <!-- New Chat Modal -->
 <div id="new-chat-modal" uk-modal>
-  <div class="uk-modal-dialog uk-modal-body">
-    <h2 class="uk-modal-title text-base font-semibold mb-4">New Chat</h2>
+  <div class="uk-modal-dialog uk-modal-body" style="max-width: 420px; border-radius: 12px;">
+    <h2 class="uk-modal-title text-base font-semibold mb-5">New Chat</h2>
     <form
       hx-post="/chat/sessions"
       hx-target="main"
@@ -49,20 +151,21 @@
       hx-on::after-request="UIkit.modal('#new-chat-modal').hide(); htmx.ajax('GET', '/chat/sessions/list', {target: '#session-list', swap: 'innerHTML'});"
     >
       <div class="uk-margin">
-        <label class="uk-form-label" for="agent-select">Select an agent</label>
-        <div class="uk-form-controls">
-          <select id="agent-select" name="agent" class="uk-select">
-            {{range .Agents}}
-            <option value="{{.Name}}">{{.Name}}{{if .Description}} — {{.Description}}{{end}}</option>
-            {{else}}
-            <option disabled>No agents available</option>
-            {{end}}
-          </select>
-        </div>
+        <label class="uk-form-label text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1 block"
+          for="agent-select">Agent</label>
+        <select id="agent-select" name="agent" class="uk-select" style="border-radius: 6px;">
+          {{range .Agents}}
+          <option value="{{.Name}}">{{.Name}}{{if .Description}} — {{.Description}}{{end}}</option>
+          {{else}}
+          <option disabled>No agents available</option>
+          {{end}}
+        </select>
       </div>
-      <div class="flex justify-end gap-2 mt-4">
-        <button type="button" class="uk-button uk-button-default uk-modal-close">Cancel</button>
-        <button type="submit" class="uk-button uk-button-primary">Start Chat</button>
+      <div class="flex justify-end gap-2 mt-5">
+        <button type="button" class="uk-button uk-button-default uk-modal-close"
+          style="border-radius: 6px;">Cancel</button>
+        <button type="submit" class="uk-button uk-button-primary"
+          style="border-radius: 6px;">Start Chat</button>
       </div>
     </form>
   </div>
@@ -79,59 +182,75 @@
   hx-target="main"
   hx-swap="innerHTML"
   hx-push-url="/chat?session={{.ID}}"
-  class="flex flex-col px-3 py-2 hover:bg-muted/50 cursor-pointer rounded mx-1 {{if and $.Current (eq $.Current.ID .ID)}}bg-muted{{end}}"
+  class="session-row {{if and $.Current (eq $.Current.ID .ID)}}active{{end}}"
 >
   <span class="font-medium text-sm truncate">{{.AgentName}}</span>
-  <span class="text-xs text-muted-foreground">{{len .Messages}} messages</span>
+  <span class="text-xs text-muted-foreground mt-0.5">{{len .Messages}} messages</span>
 </a>
 {{else}}
-<p class="text-xs text-muted-foreground px-3 py-2">No chats yet.</p>
+<div class="px-4 py-8 text-center">
+  <p class="text-xs text-muted-foreground">No chats yet.</p>
+</div>
 {{end}}
 {{end}}
 
 {{define "chat-content"}}
 {{if .Current}}
 <div class="flex flex-col h-full">
-  <!-- Header -->
-  <div class="border-b px-4 py-3 flex items-center gap-2 shrink-0">
-    <span class="uk-badge">{{.Current.AgentName}}</span>
-    <span class="text-sm text-muted-foreground">{{len .Current.Messages}} messages</span>
+  <!-- Chat header -->
+  <div class="border-b px-5 py-3 flex items-center gap-3 shrink-0 bg-background">
+    <span class="uk-badge" style="border-radius: 6px; padding: 3px 8px; font-size: 11px;">
+      {{.Current.AgentName}}
+    </span>
+    <span class="text-xs text-muted-foreground">{{len .Current.Messages}} messages</span>
   </div>
 
   <!-- Messages -->
   <div
     id="message-list"
-    class="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3"
+    class="flex-1 overflow-y-auto px-5 py-5 flex flex-col gap-4"
   >
     {{template "messages" .Current.Messages}}
   </div>
 
   <!-- Input -->
-  <div class="border-t px-4 py-3 shrink-0">
+  <div class="chat-input-area shrink-0">
     <form
       hx-post="/chat/sessions/{{.Current.ID}}/messages"
       hx-target="#message-list"
       hx-swap="beforeend"
+      hx-indicator="#thinking"
       hx-on::after-request="this.reset(); var ml = document.getElementById('message-list'); if(ml) ml.scrollTop = ml.scrollHeight;"
-      class="flex gap-2"
+      onsubmit="showThinking()"
     >
-      <input
-        name="message"
-        type="text"
-        placeholder="Type a message..."
-        class="uk-input flex-1"
-        autocomplete="off"
-        required
-      />
-      <button type="submit" class="uk-button uk-button-primary shrink-0">Send</button>
+      <div class="chat-input-wrap">
+        <input
+          name="message"
+          type="text"
+          placeholder="Message {{.Current.AgentName}}…"
+          class="chat-input"
+          autocomplete="off"
+          required
+        />
+        <button type="submit" class="send-btn" aria-label="Send">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+          </svg>
+        </button>
+      </div>
     </form>
   </div>
 </div>
 {{else}}
-<div class="flex-1 flex items-center justify-center text-muted-foreground h-full">
-  <div class="text-center">
-    <p class="text-lg font-medium mb-2">No chat selected</p>
-    <p class="text-sm">Start a new chat using the button on the left.</p>
+<div class="flex-1 flex items-center justify-center h-full">
+  <div class="text-center max-w-xs">
+    <div class="text-muted-foreground/30 text-5xl mb-4">💬</div>
+    <p class="text-sm font-medium text-foreground mb-1">No chat selected</p>
+    <p class="text-xs text-muted-foreground">
+      Start a new chat using the button on the left.
+    </p>
   </div>
 </div>
 {{end}}
@@ -141,11 +260,11 @@
 {{range .}}
 {{if eq .Role "user"}}
 <div class="flex justify-end">
-  <div class="uk-card uk-card-primary uk-card-body py-2 px-3 max-w-prose rounded-xl text-sm" style="white-space: pre-wrap;">{{.Content}}</div>
+  <div class="msg-user">{{.Content}}</div>
 </div>
 {{else}}
 <div class="flex justify-start">
-  <div class="uk-card uk-card-default uk-card-body py-2 px-3 max-w-prose rounded-xl text-sm" style="white-space: pre-wrap;">{{.Content}}</div>
+  <div class="msg-assistant">{{.Content}}</div>
 </div>
 {{end}}
 {{end}}

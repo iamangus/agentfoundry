@@ -1,13 +1,15 @@
 {{define "navbar"}}
-<nav class="uk-navbar-container border-b" uk-navbar style="min-height: 49px;">
-  <div class="uk-navbar-left px-4">
-    <a class="uk-navbar-item uk-logo font-semibold text-base" href="/">agentfile</a>
-    <ul class="uk-navbar-nav">
+<nav class="uk-navbar-container border-b bg-background/95 backdrop-blur-sm" uk-navbar style="min-height: 52px;">
+  <div class="uk-navbar-left px-5">
+    <a class="uk-navbar-item uk-logo text-sm font-semibold tracking-tight" href="/">
+      <span class="text-foreground">agent</span><span class="text-primary">file</span>
+    </a>
+    <ul class="uk-navbar-nav ml-2">
       <li class="{{if eq .ActivePage "chat"}}uk-active{{end}}">
-        <a href="/chat">Chat</a>
+        <a href="/chat" class="text-sm px-3">Chat</a>
       </li>
       <li class="{{if eq .ActivePage "agents"}}uk-active{{end}}">
-        <a href="/agents">Agents</a>
+        <a href="/agents" class="text-sm px-3">Agents</a>
       </li>
     </ul>
   </div>
