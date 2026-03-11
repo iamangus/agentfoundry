@@ -404,11 +404,13 @@
         input.focus();
       });
 
+      // Server-sent "event: error" — agent reported a real error.
       es.addEventListener('error', function(e) {
+        if (!e.data) return; // connection-level error, not a server event — ignore
         es.close();
         var statusEl = thinkingWrap && thinkingWrap.querySelector('.thinking-status');
         if (statusEl) {
-          statusEl.textContent = 'Error: ' + (e.data ? JSON.parse(e.data) : 'something went wrong');
+          statusEl.textContent = 'Error: ' + JSON.parse(e.data);
           statusEl.classList.add('text-destructive');
           statusEl.classList.remove('italic');
         }

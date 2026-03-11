@@ -45,24 +45,73 @@ type runEvent struct {
 	data string
 }
 
-// agentRun tracks an in-flight agent run.
+// agentRun tracks an in-flight agent run with fan-out to multiple SSE clients.
 type agentRun struct {
-	ch     chan runEvent // closed when the run finishes
-	result string        // populated on done
-	err    error         // populated on error
+	mu     sync.Mutex
+	events []runEvent      // append-only replay buffer
+	subs   []chan runEvent // one channel per connected SSE client
+	closed bool            // true once the terminal event has been published
 }
 
-// chanReporter implements agent.Reporter by sending status updates to a channel.
-type chanReporter struct {
-	ch chan runEvent
-}
-
-func (r *chanReporter) Update(status string) {
-	// Non-blocking send — drop the event if no SSE client is connected yet.
-	select {
-	case r.ch <- runEvent{typ: "status", data: status}:
-	default:
+// publish appends the event to the replay buffer and fans it out to all subscribers.
+func (r *agentRun) publish(evt runEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, evt)
+	for _, ch := range r.subs {
+		// Non-blocking: each subscriber channel is buffered; if full, drop rather than block the agent.
+		select {
+		case ch <- evt:
+		default:
+		}
 	}
+	if evt.typ == "done" || evt.typ == "error" {
+		r.closed = true
+		for _, ch := range r.subs {
+			close(ch)
+		}
+		r.subs = nil
+	}
+}
+
+// subscribe returns a channel that will receive all future events.
+// Any events already in the replay buffer are sent first.
+func (r *agentRun) subscribe() (chan runEvent, func()) {
+	ch := make(chan runEvent, 64)
+	r.mu.Lock()
+	// Replay buffered events so a late-joining client catches up.
+	for _, evt := range r.events {
+		ch <- evt
+	}
+	if r.closed {
+		// Run already finished — close immediately after replay.
+		close(ch)
+		r.mu.Unlock()
+		return ch, func() {}
+	}
+	r.subs = append(r.subs, ch)
+	r.mu.Unlock()
+
+	unsubscribe := func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		for i, s := range r.subs {
+			if s == ch {
+				r.subs = append(r.subs[:i], r.subs[i+1:]...)
+				break
+			}
+		}
+	}
+	return ch, unsubscribe
+}
+
+// runReporter implements agent.Reporter by publishing to an agentRun.
+type runReporter struct {
+	run *agentRun
+}
+
+func (r *runReporter) Update(status string) {
+	r.run.publish(runEvent{typ: "status", data: status})
 }
 
 // Handler serves the web UI pages.
@@ -213,10 +262,7 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 
 	// Create a run and start the agent asynchronously.
 	runID := newID()
-	run := &agentRun{
-		// Buffered so the agent goroutine never blocks on status events.
-		ch: make(chan runEvent, 32),
-	}
+	run := &agentRun{}
 
 	h.mu.Lock()
 	h.runs[runID] = run
@@ -226,7 +272,7 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 		// Use a detached context so the agent run isn't cancelled when the
 		// POST response is sent and the client connection closes.
 		ctx := context.WithoutCancel(r.Context())
-		rep := &chanReporter{ch: run.ch}
+		rep := &runReporter{run: run}
 		var result string
 		var err error
 
@@ -236,10 +282,8 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 			result, err = h.runtime.RunWithReporter(ctx, def, content, rep)
 		}
 
-		// Store result and append to session
+		// Append to session and publish terminal event.
 		h.mu.Lock()
-		run.result = result
-		run.err = err
 		if err != nil {
 			slog.Error("agent run failed", "agent", session.AgentName, "error", err)
 			session.Messages = append(session.Messages, Message{
@@ -247,17 +291,28 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 				Content: "Error: " + err.Error(),
 				Time:    time.Now(),
 			})
-			run.ch <- runEvent{typ: "error", data: err.Error()}
 		} else {
 			session.Messages = append(session.Messages, Message{
 				Role:    "assistant",
 				Content: result,
 				Time:    time.Now(),
 			})
-			run.ch <- runEvent{typ: "done", data: result}
 		}
 		h.mu.Unlock()
-		close(run.ch)
+
+		if err != nil {
+			run.publish(runEvent{typ: "error", data: err.Error()})
+		} else {
+			run.publish(runEvent{typ: "done", data: result})
+		}
+
+		// Keep the run in the map for a grace period so that clients which
+		// auto-reconnect or connect late can still get the replay buffer.
+		time.AfterFunc(30*time.Second, func() {
+			h.mu.Lock()
+			delete(h.runs, runID)
+			h.mu.Unlock()
+		})
 	}()
 
 	// Return the run ID so the client can open an SSE stream.
@@ -266,6 +321,8 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 // runEvents streams SSE events for a given run ID.
+// Multiple clients may connect to the same run concurrently — each gets a
+// full replay of events emitted so far, then live updates until done.
 func (h *Handler) runEvents(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("id")
 
@@ -288,9 +345,12 @@ func (h *Handler) runEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ch, unsubscribe := run.subscribe()
+	defer unsubscribe()
+
 	for {
 		select {
-		case evt, open := <-run.ch:
+		case evt, open := <-ch:
 			if !open {
 				return
 			}
@@ -298,10 +358,6 @@ func (h *Handler) runEvents(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", evt.typ, encoded)
 			flusher.Flush()
 			if evt.typ == "done" || evt.typ == "error" {
-				// Clean up run after sending terminal event
-				h.mu.Lock()
-				delete(h.runs, runID)
-				h.mu.Unlock()
 				return
 			}
 		case <-r.Context().Done():
