@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 
@@ -17,6 +18,8 @@ type DefinitionStore interface {
 	DeleteDefinition(name string) error
 	GetDefinition(name string) *config.Definition
 	ListDefinitions() []*config.Definition
+	GetRawDefinition(name string) ([]byte, error)
+	SaveRawDefinition(name string, data []byte) error
 }
 
 // Handler serves the REST API.
@@ -41,7 +44,9 @@ func NewHandler(reg *registry.Registry, pool *mcpclient.Pool, store DefinitionSt
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/agents", h.listAgents)
 	mux.HandleFunc("GET /api/v1/agents/{name}", h.getAgent)
+	mux.HandleFunc("GET /api/v1/agents/{name}/raw", h.getRawAgent)
 	mux.HandleFunc("POST /api/v1/agents", h.createAgent)
+	mux.HandleFunc("PUT /api/v1/agents/{name}", h.updateAgentRaw)
 	mux.HandleFunc("DELETE /api/v1/agents/{name}", h.deleteAgent)
 	mux.HandleFunc("POST /api/v1/agents/{name}/run", h.runAgent)
 	mux.HandleFunc("GET /api/v1/tools", h.listTools)
@@ -170,6 +175,33 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 		"agent":    name,
 		"response": result,
 	})
+}
+
+func (h *Handler) getRawAgent(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	data, err := h.store.GetRawDefinition(name)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+}
+
+func (h *Handler) updateAgentRaw(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to read body"})
+		return
+	}
+	if err := h.store.SaveRawDefinition(name, data); err != nil {
+		slog.Error("failed to save raw agent", "name", name, "error", err)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {

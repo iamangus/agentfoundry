@@ -17,6 +17,7 @@ import (
 	mcpserver "github.com/angoo/agentfile/internal/mcp"
 	"github.com/angoo/agentfile/internal/mcpclient"
 	"github.com/angoo/agentfile/internal/registry"
+	"github.com/angoo/agentfile/internal/web"
 )
 
 func main() {
@@ -91,6 +92,14 @@ func main() {
 	// REST API for agents and status
 	apiHandler := api.NewHandler(reg, pool, loader, agentRuntime)
 	apiHandler.RegisterRoutes(mux)
+
+	// Web UI (chat + agents pages)
+	webHandler, err := web.NewHandler(loader, agentRuntime)
+	if err != nil {
+		slog.Error("failed to create web UI handler", "error", err)
+		os.Exit(1)
+	}
+	webHandler.RegisterRoutes(mux)
 
 	server := &http.Server{
 		Addr:    cfg.Listen,

@@ -1,0 +1,152 @@
+{{define "chat.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chat — agentfile</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/franken-ui@2.1.0/dist/css/core.min.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/franken-ui@2.1.0/dist/css/utilities.min.css" />
+  <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/uikit@3.23.6/dist/js/uikit.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/uikit@3.23.6/dist/js/uikit-icons.min.js"></script>
+  <script type="module" src="https://cdn.jsdelivr.net/npm/franken-ui@2.1.0/dist/js/core.iife.js"></script>
+  <style>
+    html, body { height: 100%; margin: 0; }
+    .page-body { flex: 1; display: flex; overflow: hidden; height: calc(100vh - 49px); }
+  </style>
+</head>
+<body class="bg-background text-foreground flex flex-col min-h-screen">
+
+{{template "navbar" .}}
+
+<div class="page-body">
+  <!-- Sidebar -->
+  <aside class="w-64 border-r flex flex-col shrink-0 overflow-hidden">
+    <div class="p-3 border-b">
+      <button class="uk-button uk-button-primary w-full" uk-toggle="target: #new-chat-modal">
+        + New Chat
+      </button>
+    </div>
+    <div id="session-list" class="flex-1 overflow-y-auto py-2">
+      {{template "session-list" .}}
+    </div>
+  </aside>
+
+  <!-- Main content -->
+  <main class="flex-1 flex flex-col overflow-hidden">
+    {{template "chat-content" .}}
+  </main>
+</div>
+
+<!-- New Chat Modal -->
+<div id="new-chat-modal" uk-modal>
+  <div class="uk-modal-dialog uk-modal-body">
+    <h2 class="uk-modal-title text-base font-semibold mb-4">New Chat</h2>
+    <form
+      hx-post="/chat/sessions"
+      hx-target="main"
+      hx-swap="innerHTML"
+      hx-on::after-request="UIkit.modal('#new-chat-modal').hide(); htmx.ajax('GET', '/chat/sessions/list', {target: '#session-list', swap: 'innerHTML'});"
+    >
+      <div class="uk-margin">
+        <label class="uk-form-label" for="agent-select">Select an agent</label>
+        <div class="uk-form-controls">
+          <select id="agent-select" name="agent" class="uk-select">
+            {{range .Agents}}
+            <option value="{{.Name}}">{{.Name}}{{if .Description}} — {{.Description}}{{end}}</option>
+            {{else}}
+            <option disabled>No agents available</option>
+            {{end}}
+          </select>
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 mt-4">
+        <button type="button" class="uk-button uk-button-default uk-modal-close">Cancel</button>
+        <button type="submit" class="uk-button uk-button-primary">Start Chat</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+</body>
+</html>
+{{end}}
+
+{{define "session-list"}}
+{{range .Sessions}}
+<a
+  hx-get="/chat?session={{.ID}}"
+  hx-target="main"
+  hx-swap="innerHTML"
+  hx-push-url="/chat?session={{.ID}}"
+  class="flex flex-col px-3 py-2 hover:bg-muted/50 cursor-pointer rounded mx-1 {{if and $.Current (eq $.Current.ID .ID)}}bg-muted{{end}}"
+>
+  <span class="font-medium text-sm truncate">{{.AgentName}}</span>
+  <span class="text-xs text-muted-foreground">{{len .Messages}} messages</span>
+</a>
+{{else}}
+<p class="text-xs text-muted-foreground px-3 py-2">No chats yet.</p>
+{{end}}
+{{end}}
+
+{{define "chat-content"}}
+{{if .Current}}
+<div class="flex flex-col h-full">
+  <!-- Header -->
+  <div class="border-b px-4 py-3 flex items-center gap-2 shrink-0">
+    <span class="uk-badge">{{.Current.AgentName}}</span>
+    <span class="text-sm text-muted-foreground">{{len .Current.Messages}} messages</span>
+  </div>
+
+  <!-- Messages -->
+  <div
+    id="message-list"
+    class="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3"
+  >
+    {{template "messages" .Current.Messages}}
+  </div>
+
+  <!-- Input -->
+  <div class="border-t px-4 py-3 shrink-0">
+    <form
+      hx-post="/chat/sessions/{{.Current.ID}}/messages"
+      hx-target="#message-list"
+      hx-swap="beforeend"
+      hx-on::after-request="this.reset(); var ml = document.getElementById('message-list'); if(ml) ml.scrollTop = ml.scrollHeight;"
+      class="flex gap-2"
+    >
+      <input
+        name="message"
+        type="text"
+        placeholder="Type a message..."
+        class="uk-input flex-1"
+        autocomplete="off"
+        required
+      />
+      <button type="submit" class="uk-button uk-button-primary shrink-0">Send</button>
+    </form>
+  </div>
+</div>
+{{else}}
+<div class="flex-1 flex items-center justify-center text-muted-foreground h-full">
+  <div class="text-center">
+    <p class="text-lg font-medium mb-2">No chat selected</p>
+    <p class="text-sm">Start a new chat using the button on the left.</p>
+  </div>
+</div>
+{{end}}
+{{end}}
+
+{{define "messages"}}
+{{range .}}
+{{if eq .Role "user"}}
+<div class="flex justify-end">
+  <div class="uk-card uk-card-primary uk-card-body py-2 px-3 max-w-prose rounded-xl text-sm" style="white-space: pre-wrap;">{{.Content}}</div>
+</div>
+{{else}}
+<div class="flex justify-start">
+  <div class="uk-card uk-card-default uk-card-body py-2 px-3 max-w-prose rounded-xl text-sm" style="white-space: pre-wrap;">{{.Content}}</div>
+</div>
+{{end}}
+{{end}}
+{{end}}

@@ -136,6 +136,55 @@ func (l *Loader) GetDefinition(name string) *Definition {
 	return l.definitions[name]
 }
 
+// GetRawDefinition returns the raw YAML bytes for a definition by name.
+func (l *Loader) GetRawDefinition(name string) ([]byte, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	// Try .yaml first, then .yml
+	for _, ext := range []string{".yaml", ".yml"} {
+		path := filepath.Join(l.dir, name+ext)
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return data, nil
+		}
+	}
+	return nil, fmt.Errorf("definition %q not found", name)
+}
+
+// SaveRawDefinition writes raw YAML bytes for a definition to disk, parses and registers it.
+func (l *Loader) SaveRawDefinition(name string, data []byte) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	var def Definition
+	if err := yaml.Unmarshal(data, &def); err != nil {
+		return fmt.Errorf("parse YAML: %w", err)
+	}
+	if err := def.Validate(); err != nil {
+		return err
+	}
+
+	filename := def.Name + ".yaml"
+	path := filepath.Join(l.dir, filename)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("write definition file: %w", err)
+	}
+
+	if err := l.agentReg.RegisterAgent(&def); err != nil {
+		return err
+	}
+	// If name changed (shouldn't happen via UI, but be safe), clean up old file
+	if name != def.Name {
+		for _, ext := range []string{".yaml", ".yml"} {
+			_ = os.Remove(filepath.Join(l.dir, name+ext))
+		}
+		delete(l.definitions, name)
+	}
+	l.definitions[def.Name] = &def
+	return nil
+}
+
 // ListDefinitions returns all loaded definitions.
 func (l *Loader) ListDefinitions() []*Definition {
 	l.mu.Lock()

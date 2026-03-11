@@ -1,0 +1,15 @@
+{{define "navbar"}}
+<nav class="uk-navbar-container border-b" uk-navbar style="min-height: 49px;">
+  <div class="uk-navbar-left px-4">
+    <a class="uk-navbar-item uk-logo font-semibold text-base" href="/">agentfile</a>
+    <ul class="uk-navbar-nav">
+      <li class="{{if eq .ActivePage "chat"}}uk-active{{end}}">
+        <a href="/chat">Chat</a>
+      </li>
+      <li class="{{if eq .ActivePage "agents"}}uk-active{{end}}">
+        <a href="/agents">Agents</a>
+      </li>
+    </ul>
+  </div>
+</nav>
+{{end}}
