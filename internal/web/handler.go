@@ -133,6 +133,14 @@ func (h *Handler) chatPage(w http.ResponseWriter, r *http.Request) {
 		Sessions:   sessions,
 		Current:    current,
 	}
+
+	// HTMX partial request (e.g. clicking a session in the sidebar) —
+	// return only the chat content area, not the full page.
+	if r.Header.Get("HX-Request") == "true" {
+		h.renderPartial(w, "chat-content", data)
+		return
+	}
+
 	h.render(w, "chat.html", data)
 }
 
