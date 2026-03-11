@@ -62,7 +62,7 @@ func NewHandler(store DefinitionStore, runtime *agent.Runtime) (*Handler, error)
 
 // RegisterRoutes registers the web UI routes on the given mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /", h.redirectToChat)
+	mux.HandleFunc("GET /{$}", h.redirectToChat)
 	mux.HandleFunc("GET /chat", h.chatPage)
 	mux.HandleFunc("POST /chat/sessions", h.newSession)
 	mux.HandleFunc("GET /chat/sessions/list", h.sessionListPartial)
@@ -74,10 +74,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (h *Handler) redirectToChat(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
 	http.Redirect(w, r, "/chat", http.StatusFound)
 }
 
