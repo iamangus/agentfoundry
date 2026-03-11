@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"html/template"
@@ -213,6 +214,9 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 	h.mu.Unlock()
 
 	go func() {
+		// Use a detached context so the agent run isn't cancelled when the
+		// POST response is sent and the client connection closes.
+		ctx := context.WithoutCancel(r.Context())
 		rep := &chanReporter{ch: run.ch}
 		var result string
 		var err error
@@ -220,7 +224,7 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 		if def == nil {
 			err = fmt.Errorf("agent %q not found", session.AgentName)
 		} else {
-			result, err = h.runtime.RunWithReporter(r.Context(), def, content, rep)
+			result, err = h.runtime.RunWithReporter(ctx, def, content, rep)
 		}
 
 		// Store result and append to session
