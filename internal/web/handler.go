@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"log/slog"
@@ -285,7 +286,8 @@ func (h *Handler) runEvents(w http.ResponseWriter, r *http.Request) {
 			if !open {
 				return
 			}
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", evt.typ, evt.data)
+			encoded, _ := json.Marshal(evt.data)
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", evt.typ, encoded)
 			flusher.Flush()
 			if evt.typ == "done" || evt.typ == "error" {
 				// Clean up run after sending terminal event

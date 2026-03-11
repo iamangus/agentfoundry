@@ -354,13 +354,13 @@
 
       es.addEventListener('status', function(e) {
         var statusEl = thinkingWrap && thinkingWrap.querySelector('.thinking-status');
-        if (statusEl) statusEl.textContent = e.data;
+        if (statusEl) statusEl.textContent = JSON.parse(e.data);
         scrollToBottom();
       });
 
       es.addEventListener('done', function(e) {
         es.close();
-        replaceThinkingBubble(thinkingWrap, e.data);
+        replaceThinkingBubble(thinkingWrap, JSON.parse(e.data));
         input.disabled = false;
         input.focus();
       });
@@ -369,7 +369,7 @@
         es.close();
         var statusEl = thinkingWrap && thinkingWrap.querySelector('.thinking-status');
         if (statusEl) {
-          statusEl.textContent = 'Error: ' + (e.data || 'something went wrong');
+          statusEl.textContent = 'Error: ' + (e.data ? JSON.parse(e.data) : 'something went wrong');
           statusEl.classList.add('text-destructive');
           statusEl.classList.remove('italic');
         }
