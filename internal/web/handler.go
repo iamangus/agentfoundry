@@ -456,7 +456,10 @@ func (h *Handler) runEvents(w http.ResponseWriter, r *http.Request) {
 				fmt.Fprintf(w, "event: status\ndata: %s\n\n", template.HTMLEscapeString(evt.data))
 			case "done":
 				// evt.data is already an HTML fragment built by postMessage.
-				fmt.Fprintf(w, "event: done\ndata: %s\n\n", evt.data)
+				// SSE requires each newline in the payload to be prefixed with
+				// "data: " so multi-line HTML isn't truncated at the first newline.
+				sseData := strings.ReplaceAll(evt.data, "\n", "\ndata: ")
+				fmt.Fprintf(w, "event: done\ndata: %s\n\n", sseData)
 			}
 			flusher.Flush()
 			if evt.typ == "done" {
