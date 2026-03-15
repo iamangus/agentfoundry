@@ -5,6 +5,7 @@ go 1.25.3
 require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/mark3labs/mcp-go v0.45.0
+	github.com/yuin/goldmark v1.7.8
 	gopkg.in/yaml.v3 v3.0.1
 )
 

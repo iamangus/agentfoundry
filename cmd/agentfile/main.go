@@ -94,7 +94,7 @@ func main() {
 	apiHandler.RegisterRoutes(mux)
 
 	// Web UI (chat + agents pages)
-	webHandler, err := web.NewHandler(loader, agentRuntime)
+	webHandler, err := web.NewHandler(loader, agentRuntime, pool)
 	if err != nil {
 		slog.Error("failed to create web UI handler", "error", err)
 		os.Exit(1)

@@ -3,16 +3,17 @@ package web
 import (
 	"context"
 	"embed"
-	"encoding/json"
 	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/angoo/agentfile/internal/agent"
 	"github.com/angoo/agentfile/internal/config"
+	"github.com/angoo/agentfile/internal/mcpclient"
 )
 
 //go:embed templates/*.html
@@ -22,6 +23,10 @@ var templateFS embed.FS
 type DefinitionStore interface {
 	ListDefinitions() []*config.Definition
 	GetRawDefinition(name string) ([]byte, error)
+	SaveDefinition(def *config.Definition) error
+	DeleteDefinition(name string) error
+	GetDefinition(name string) *config.Definition
+	SaveRawDefinition(name string, data []byte) error
 }
 
 // Message is a single turn in a chat.
@@ -118,6 +123,7 @@ func (r *runReporter) Update(status string) {
 // Handler serves the web UI pages.
 type Handler struct {
 	store    DefinitionStore
+	pool     *mcpclient.Pool
 	runtime  *agent.Runtime
 	tmpl     *template.Template
 	mu       sync.Mutex
@@ -126,13 +132,34 @@ type Handler struct {
 }
 
 // NewHandler creates a new web UI handler.
-func NewHandler(store DefinitionStore, runtime *agent.Runtime) (*Handler, error) {
-	tmpl, err := template.New("").ParseFS(templateFS, "templates/*.html")
+func NewHandler(store DefinitionStore, runtime *agent.Runtime, pool *mcpclient.Pool) (*Handler, error) {
+	funcMap := template.FuncMap{
+		"renderMarkdown": renderMarkdown,
+		// dict builds a map[string]any for passing multiple named values to sub-templates.
+		// Keys must be strings and arguments must be provided in key-value pairs.
+		// Odd-length or non-string-key arguments are silently skipped.
+		"dict": func(kvs ...any) map[string]any {
+			m := make(map[string]any, len(kvs)/2)
+			for i := 0; i+1 < len(kvs); i += 2 {
+				if key, ok := kvs[i].(string); ok {
+					m[key] = kvs[i+1]
+				} else {
+					slog.Warn("dict: non-string key ignored in template helper", "index", i, "key", kvs[i])
+				}
+			}
+			if len(kvs)%2 != 0 {
+				slog.Warn("dict: odd number of arguments in template helper", "count", len(kvs))
+			}
+			return m
+		},
+	}
+	tmpl, err := template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/*.html")
 	if err != nil {
 		return nil, err
 	}
 	return &Handler{
 		store:    store,
+		pool:     pool,
 		runtime:  runtime,
 		tmpl:     tmpl,
 		sessions: make(map[string]*Session),
@@ -152,6 +179,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /agents", h.agentsPage)
 	mux.HandleFunc("GET /agents/list", h.agentListPartial)
 	mux.HandleFunc("GET /agents/{name}/edit", h.agentEditPartial)
+	mux.HandleFunc("POST /agents", h.createAgentForm)
+	mux.HandleFunc("PUT /agents/{name}/yaml", h.saveAgentYaml)
+	mux.HandleFunc("DELETE /agents/{name}", h.deleteAgentWeb)
+	mux.HandleFunc("GET /tools", h.toolsPage)
+	mux.HandleFunc("GET /tools/list", h.toolListPartial)
 	slog.Info("web UI routes registered")
 }
 
@@ -162,10 +194,11 @@ func (h *Handler) redirectToChat(w http.ResponseWriter, r *http.Request) {
 // --- Chat page ---
 
 type chatPageData struct {
-	ActivePage string
-	Agents     []*config.Definition
-	Sessions   []*Session
-	Current    *Session
+	ActivePage  string
+	Agents      []*config.Definition
+	Sessions    []*Session
+	Current     *Session
+	ActiveRunID string
 }
 
 func (h *Handler) chatPage(w http.ResponseWriter, r *http.Request) {
@@ -176,13 +209,18 @@ func (h *Handler) chatPage(w http.ResponseWriter, r *http.Request) {
 	if sessionID != "" {
 		current = h.sessions[sessionID]
 	}
+	var activeRunID string
+	if current != nil {
+		activeRunID = current.ActiveRunID
+	}
 	h.mu.Unlock()
 
 	data := chatPageData{
-		ActivePage: "chat",
-		Agents:     h.store.ListDefinitions(),
-		Sessions:   sessions,
-		Current:    current,
+		ActivePage:  "chat",
+		Agents:      h.store.ListDefinitions(),
+		Sessions:    sessions,
+		Current:     current,
+		ActiveRunID: activeRunID,
 	}
 
 	// HTMX partial request (e.g. clicking a session in the sidebar) —
@@ -223,13 +261,13 @@ func (h *Handler) newSession(w http.ResponseWriter, r *http.Request) {
 			Sessions:   sessions,
 			Current:    session,
 		}
-		h.renderPartial(w, "chat-content", data)
+		// Include OOB session-list update so the sidebar refreshes without JS.
+		h.renderPartial(w, "new-session-response", data)
 		return
 	}
 
 	http.Redirect(w, r, "/chat?session="+id, http.StatusSeeOther)
 }
-
 func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
 	content := r.FormValue("message")
@@ -285,7 +323,7 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 			result, err = h.runtime.RunWithReporter(ctx, def, content, rep)
 		}
 
-		// Append to session and publish terminal event.
+		// Append to session and publish terminal event as an HTML fragment.
 		h.mu.Lock()
 		if err != nil {
 			slog.Error("agent run failed", "agent", session.AgentName, "error", err)
@@ -304,9 +342,17 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 		h.mu.Unlock()
 
 		if err != nil {
-			run.publish(runEvent{typ: "error", data: err.Error()})
+			errHTML := fmt.Sprintf(
+				`<div class="flex justify-start"><div class="msg-assistant msg-error">%s</div></div>`,
+				template.HTMLEscapeString("Error: "+err.Error()),
+			)
+			run.publish(runEvent{typ: "done", data: errHTML})
 		} else {
-			run.publish(runEvent{typ: "done", data: result})
+			doneHTML := fmt.Sprintf(
+				`<div class="flex justify-start"><div class="msg-assistant">%s</div></div>`,
+				string(renderMarkdown(result)),
+			)
+			run.publish(runEvent{typ: "done", data: doneHTML})
 		}
 
 		// Clear the active run ID on the session immediately so pollers stop finding it.
@@ -325,9 +371,21 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 		})
 	}()
 
-	// Return the run ID so the client can open an SSE stream.
-	w.Header().Set("Content-Type", "text/plain")
-	fmt.Fprint(w, runID)
+	// Return an HTML partial with OOB user-message + thinking/SSE container.
+	// The form has hx-target="#message-list" hx-swap="beforeend" so the main
+	// body (thinking container) is appended after the OOB user bubble.
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	h.renderPartial(w, "post-message-response", postMessageData{
+		Content:   content,
+		SessionID: sessionID,
+		RunID:     runID,
+	})
+}
+
+type postMessageData struct {
+	Content   string
+	SessionID string
+	RunID     string
 }
 
 // activeRun returns the current active run ID for a session, or 204 if none.
@@ -356,8 +414,9 @@ func (h *Handler) activeRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // runEvents streams SSE events for a given run ID.
-// Multiple clients may connect to the same run concurrently — each gets a
-// full replay of events emitted so far, then live updates until done.
+// Status events carry plain-text updates; the terminal "done" event carries
+// an HTML fragment that replaces the thinking container client-side via
+// the htmx-ext-sse extension.
 func (h *Handler) runEvents(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("id")
 
@@ -389,10 +448,16 @@ func (h *Handler) runEvents(w http.ResponseWriter, r *http.Request) {
 			if !open {
 				return
 			}
-			encoded, _ := json.Marshal(evt.data)
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", evt.typ, encoded)
+			switch evt.typ {
+			case "status":
+				// Plain text — htmx SSE innerHTML-swaps the thinking span.
+				fmt.Fprintf(w, "event: status\ndata: %s\n\n", template.HTMLEscapeString(evt.data))
+			case "done":
+				// evt.data is already an HTML fragment built by postMessage.
+				fmt.Fprintf(w, "event: done\ndata: %s\n\n", evt.data)
+			}
 			flusher.Flush()
-			if evt.typ == "done" || evt.typ == "error" {
+			if evt.typ == "done" {
 				return
 			}
 		case <-r.Context().Done():
@@ -450,6 +515,124 @@ func (h *Handler) agentEditPartial(w http.ResponseWriter, r *http.Request) {
 		RawYAML: string(raw),
 	}
 	h.renderPartial(w, "agent-editor", data)
+}
+
+// createAgentForm handles form-based agent creation from the web UI.
+func (h *Handler) createAgentForm(w http.ResponseWriter, r *http.Request) {
+	name := r.FormValue("name")
+	systemPrompt := r.FormValue("system_prompt")
+	if name == "" || systemPrompt == "" {
+		http.Error(w, "name and system_prompt are required", http.StatusBadRequest)
+		return
+	}
+
+	def := &config.Definition{
+		Kind:         "agent",
+		Name:         name,
+		Description:  r.FormValue("description"),
+		Model:        r.FormValue("model"),
+		SystemPrompt: systemPrompt,
+	}
+	if err := def.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := h.store.SaveDefinition(def); err != nil {
+		slog.Error("failed to save agent", "name", name, "error", err)
+		http.Error(w, "failed to save", http.StatusInternalServerError)
+		return
+	}
+
+	// Return updated agent list partial.
+	h.renderPartial(w, "agent-list-items", agentsPageData{Agents: h.store.ListDefinitions()})
+}
+
+// saveAgentYaml handles form-based YAML save from the web UI.
+func (h *Handler) saveAgentYaml(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	yaml := r.FormValue("yaml")
+	if err := h.store.SaveRawDefinition(name, []byte(yaml)); err != nil {
+		slog.Error("failed to save yaml", "name", name, "error", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// Respond with both the updated agent list (OOB) and a fresh editor.
+	raw, _ := h.store.GetRawDefinition(name)
+	h.renderPartial(w, "save-yaml-response", saveYamlData{
+		Editor: agentEditorData{Name: name, RawYAML: string(raw)},
+		Agents: h.store.ListDefinitions(),
+	})
+}
+
+type saveYamlData struct {
+	Editor agentEditorData
+	Agents []*config.Definition
+}
+
+// deleteAgentWeb handles web UI agent deletion.
+func (h *Handler) deleteAgentWeb(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if err := h.store.DeleteDefinition(name); err != nil {
+		slog.Error("failed to delete agent", "name", name, "error", err)
+		http.Error(w, "failed to delete", http.StatusInternalServerError)
+		return
+	}
+	// Return the updated agent list; agent row will be removed by hx-swap="outerHTML" with empty content.
+	h.renderPartial(w, "agent-list-items", agentsPageData{Agents: h.store.ListDefinitions()})
+}
+
+// --- Tools page ---
+
+// toolInfo is a view-model for a single discovered tool.
+type toolInfo struct {
+	QualifiedName string
+	Server        string
+	Name          string
+	Description   string
+}
+
+type toolsPageData struct {
+	ActivePage string
+	Servers    []serverTools
+}
+
+type serverTools struct {
+	Name  string
+	Tools []toolInfo
+}
+
+func (h *Handler) toolsPage(w http.ResponseWriter, r *http.Request) {
+	data := toolsPageData{
+		ActivePage: "tools",
+		Servers:    h.buildServerTools(),
+	}
+	h.render(w, "tools.html", data)
+}
+
+func (h *Handler) toolListPartial(w http.ResponseWriter, r *http.Request) {
+	data := toolsPageData{
+		Servers: h.buildServerTools(),
+	}
+	h.renderPartial(w, "tool-list", data)
+}
+
+func (h *Handler) buildServerTools() []serverTools {
+	all := h.pool.ListAllTools()
+	byServer := make(map[string][]toolInfo)
+	for _, dt := range all {
+		byServer[dt.ServerName] = append(byServer[dt.ServerName], toolInfo{
+			QualifiedName: dt.QualifiedName(),
+			Server:        dt.ServerName,
+			Name:          dt.Tool.Name,
+			Description:   dt.Tool.Description,
+		})
+	}
+	servers := make([]serverTools, 0, len(byServer))
+	for srv, tools := range byServer {
+		servers = append(servers, serverTools{Name: srv, Tools: tools})
+	}
+	sort.Slice(servers, func(i, j int) bool { return servers[i].Name < servers[j].Name })
+	return servers
 }
 
 // --- helpers ---

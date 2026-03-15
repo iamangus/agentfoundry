@@ -7,13 +7,45 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/franken-ui@2.1.0/dist/css/core.min.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/franken-ui@2.1.0/dist/css/utilities.min.css" />
   <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
-  <script src="https://cdn.jsdelivr.net/npm/uikit@3.23.6/dist/js/uikit.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/uikit@3.23.6/dist/js/uikit-icons.min.js"></script>
-  <script type="module" src="https://cdn.jsdelivr.net/npm/franken-ui@2.1.0/dist/js/core.iife.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/marked@13/marked.min.js"></script>
+  <script src="https://unpkg.com/htmx-ext-sse@2.2.3/sse.js" defer></script>
   <style>
     html, body { height: 100%; margin: 0; }
-    .page-body { flex: 1; display: flex; overflow: hidden; height: calc(100vh - 52px); }
+
+    /* CSS sidebar toggle — no JS required */
+    #sidebar-toggle { display: none; }
+    .page-body {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+      height: calc(100vh - 52px);
+    }
+    .sidebar {
+      transition: width 0.2s ease, min-width 0.2s ease;
+      width: 240px;
+      min-width: 240px;
+      overflow: hidden;
+    }
+    #sidebar-toggle:checked ~ .page-body .sidebar {
+      width: 0;
+      min-width: 0;
+      border-right: none;
+    }
+    .sidebar-toggle-btn {
+      flex-shrink: 0;
+      width: 28px; height: 28px;
+      border-radius: 6px;
+      border: 1px solid hsl(var(--border));
+      background: hsl(var(--background));
+      color: hsl(var(--muted-foreground));
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s, color 0.15s;
+    }
+    .sidebar-toggle-btn:hover {
+      background: hsl(var(--muted));
+      color: hsl(var(--foreground));
+    }
+    .sidebar-toggle-btn svg { width: 14px; height: 14px; pointer-events: none; }
 
     /* Sidebar session row */
     .session-row {
@@ -52,7 +84,11 @@
       line-height: 1.6;
       word-break: break-word;
     }
-    /* Prose styles for markdown inside assistant bubbles */
+    .msg-error {
+      background: hsl(var(--destructive) / 0.15);
+      color: hsl(var(--destructive));
+    }
+    /* Prose styles for rendered markdown inside assistant bubbles */
     .msg-assistant p { margin: 0 0 0.6em; }
     .msg-assistant p:last-child { margin-bottom: 0; }
     .msg-assistant ul, .msg-assistant ol { margin: 0.4em 0 0.6em 1.4em; padding: 0; }
@@ -78,11 +114,7 @@
       overflow-x: auto;
       margin: 0.6em 0;
     }
-    .msg-assistant pre code {
-      background: none;
-      padding: 0;
-      font-size: 0.85em;
-    }
+    .msg-assistant pre code { background: none; padding: 0; font-size: 0.85em; }
     .msg-assistant blockquote {
       border-left: 3px solid hsl(var(--border));
       margin: 0.6em 0;
@@ -101,41 +133,18 @@
 
     /* Thinking indicator */
     @keyframes pulse-text { 0%,100%{opacity:.5} 50%{opacity:1} }
-    .thinking-bubble .thinking-status {
+    .thinking-status {
       display: inline-block;
       animation: pulse-text 1.4s ease-in-out infinite;
-    }
-
-    /* Sidebar collapse */
-    .sidebar {
-      transition: width 0.2s ease, min-width 0.2s ease;
-      width: 240px;
-      min-width: 240px;
-    }
-    .sidebar.collapsed {
-      width: 0;
-      min-width: 0;
-      overflow: hidden;
-      border-right: none;
-    }
-    .sidebar-toggle {
-      flex-shrink: 0;
-      width: 28px; height: 28px;
-      border-radius: 6px;
-      border: 1px solid hsl(var(--border));
-      background: hsl(var(--background));
+      font-style: italic;
+      font-size: 13px;
       color: hsl(var(--muted-foreground));
-      cursor: pointer;
-      display: flex; align-items: center; justify-content: center;
-      transition: background 0.15s, color 0.15s;
     }
-    .sidebar-toggle:hover {
-      background: hsl(var(--muted));
-      color: hsl(var(--foreground));
-    }
-    .sidebar-toggle svg { width: 14px; height: 14px; }
 
-    /* Send input */
+    /* Auto-scroll anchor */
+    .scroll-anchor { overflow-anchor: auto; height: 1px; }
+
+    /* Chat input */
     .chat-input-area {
       border-top: 1px solid hsl(var(--border));
       padding: 12px 16px;
@@ -151,9 +160,7 @@
       padding: 6px 6px 6px 14px;
       transition: border-color 0.15s;
     }
-    .chat-input-wrap:focus-within {
-      border-color: hsl(var(--primary));
-    }
+    .chat-input-wrap:focus-within { border-color: hsl(var(--primary)); }
     .chat-input {
       flex: 1;
       background: transparent;
@@ -180,23 +187,38 @@
     }
     .send-btn:hover { opacity: 0.85; }
     .send-btn svg { width: 16px; height: 16px; }
+    .htmx-request .send-btn { opacity: 0.5; pointer-events: none; }
   </style>
 </head>
 <body class="bg-background text-foreground flex flex-col min-h-screen">
+
+<!-- CSS sidebar toggle checkbox (no JS) -->
+<input type="checkbox" id="sidebar-toggle" />
 
 {{template "navbar" .}}
 
 <div class="page-body">
   <!-- Sidebar -->
-  <aside id="chat-sidebar" class="sidebar border-r flex flex-col shrink-0 overflow-hidden bg-background">
+  <aside class="sidebar border-r flex flex-col shrink-0 bg-background">
     <div class="px-3 py-3 border-b">
-      <button
-        class="uk-button uk-button-primary w-full text-sm"
-        style="border-radius: 8px; padding: 7px 12px;"
-        uk-toggle="target: #new-chat-modal"
+      <form
+        hx-post="/chat/sessions"
+        hx-target="#chat-main"
+        hx-swap="innerHTML"
+        hx-push-url="true"
+        class="flex gap-2"
       >
-        + New Chat
-      </button>
+        <select name="agent" class="uk-select text-xs flex-1" style="border-radius: 6px; height: 34px; padding: 0 8px;">
+          {{range .Agents}}
+          <option value="{{.Name}}">{{.Name}}</option>
+          {{else}}
+          <option disabled>No agents</option>
+          {{end}}
+        </select>
+        <button type="submit" class="uk-button uk-button-primary text-xs shrink-0" style="border-radius: 6px; padding: 0 12px; height: 34px;">
+          + Chat
+        </button>
+      </form>
     </div>
     <div id="session-list" class="flex-1 overflow-y-auto py-2">
       {{template "session-list" .}}
@@ -204,40 +226,9 @@
   </aside>
 
   <!-- Main content -->
-  <main class="flex-1 flex flex-col overflow-hidden">
+  <main id="chat-main" class="flex-1 flex flex-col overflow-hidden">
     {{template "chat-content" .}}
   </main>
-</div>
-
-<!-- New Chat Modal -->
-<div id="new-chat-modal" uk-modal>
-  <div class="uk-modal-dialog uk-modal-body" style="max-width: 420px; border-radius: 12px;">
-    <h2 class="uk-modal-title text-base font-semibold mb-5">New Chat</h2>
-    <form
-      hx-post="/chat/sessions"
-      hx-target="main"
-      hx-swap="innerHTML"
-      hx-on::after-request="UIkit.modal('#new-chat-modal').hide(); htmx.ajax('GET', '/chat/sessions/list', {target: '#session-list', swap: 'innerHTML'});"
-    >
-      <div class="uk-margin">
-        <label class="uk-form-label text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1 block"
-          for="agent-select">Agent</label>
-        <select id="agent-select" name="agent" class="uk-select" style="border-radius: 6px;">
-          {{range .Agents}}
-          <option value="{{.Name}}">{{.Name}}{{if .Description}} — {{.Description}}{{end}}</option>
-          {{else}}
-          <option disabled>No agents available</option>
-          {{end}}
-        </select>
-      </div>
-      <div class="flex justify-end gap-2 mt-5">
-        <button type="button" class="uk-button uk-button-default uk-modal-close"
-          style="border-radius: 6px;">Cancel</button>
-        <button type="submit" class="uk-button uk-button-primary"
-          style="border-radius: 6px;">Start Chat</button>
-      </div>
-    </form>
-  </div>
 </div>
 
 </body>
@@ -248,7 +239,7 @@
 {{range .Sessions}}
 <a
   hx-get="/chat?session={{.ID}}"
-  hx-target="main"
+  hx-target="#chat-main"
   hx-swap="innerHTML"
   hx-push-url="/chat?session={{.ID}}"
   class="session-row {{if and $.Current (eq $.Current.ID .ID)}}active{{end}}"
@@ -268,11 +259,11 @@
 <div class="flex flex-col h-full">
   <!-- Chat header -->
   <div class="border-b px-4 py-3 flex items-center gap-3 shrink-0 bg-background">
-    <button class="sidebar-toggle" onclick="toggleSidebar()" aria-label="Toggle sidebar">
+    <label for="sidebar-toggle" class="sidebar-toggle-btn" aria-label="Toggle sidebar">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>
       </svg>
-    </button>
+    </label>
     <span class="uk-badge" style="border-radius: 6px; padding: 3px 8px; font-size: 11px;">
       {{.Current.AgentName}}
     </span>
@@ -285,14 +276,33 @@
     class="flex-1 overflow-y-auto px-5 py-5 flex flex-col gap-4"
   >
     {{template "messages" .Current.Messages}}
+    {{/* If a run is already active when the page loads, reconnect via SSE */}}
+    {{if .ActiveRunID}}
+    <div id="run-{{.ActiveRunID}}"
+         hx-ext="sse"
+         sse-connect="/chat/runs/{{.ActiveRunID}}/events"
+         sse-swap="done"
+         hx-swap="outerHTML">
+      <div class="flex justify-start">
+        <div class="msg-assistant">
+          <span class="thinking-status" sse-swap="status" hx-swap="innerHTML">Reconnecting…</span>
+        </div>
+      </div>
+    </div>
+    {{end}}
+    <div class="scroll-anchor"></div>
   </div>
 
   <!-- Input -->
   <div class="chat-input-area shrink-0">
-    <form id="chat-form" onsubmit="sendMessage(event, '{{.Current.ID}}')">
+    <form
+      id="chat-form-{{.Current.ID}}"
+      hx-post="/chat/sessions/{{.Current.ID}}/messages"
+      hx-target="#message-list"
+      hx-swap="beforeend"
+    >
       <div class="chat-input-wrap">
         <input
-          id="chat-input"
           name="message"
           type="text"
           placeholder="Message {{.Current.AgentName}}…"
@@ -310,187 +320,22 @@
       </div>
     </form>
   </div>
-  <script>
-  function toggleSidebar() {
-    var sb = document.getElementById('chat-sidebar');
-    if (sb) sb.classList.toggle('collapsed');
-  }
-
-  function renderMarkdown() {
-    document.querySelectorAll('.msg-assistant[data-raw]').forEach(function(el) {
-      el.innerHTML = marked.parse(el.dataset.raw);
-      el.removeAttribute('data-raw');
-    });
-  }
-  document.addEventListener('DOMContentLoaded', function() {
-    renderMarkdown();
-    startRunPoller('{{.Current.ID}}');
-  });
-
-  function scrollToBottom() {
-    var ml = document.getElementById('message-list');
-    if (ml) ml.scrollTop = ml.scrollHeight;
-  }
-
-  function appendUserBubble(text) {
-    var ml = document.getElementById('message-list');
-    if (!ml) return;
-    var div = document.createElement('div');
-    div.className = 'flex justify-end';
-    var bubble = document.createElement('div');
-    bubble.className = 'msg-user';
-    bubble.textContent = text;
-    div.appendChild(bubble);
-    ml.appendChild(div);
-    scrollToBottom();
-  }
-
-  function appendThinkingBubble() {
-    var ml = document.getElementById('message-list');
-    if (!ml) return null;
-    var wrap = document.createElement('div');
-    wrap.className = 'flex justify-start';
-    wrap.innerHTML =
-      '<div class="msg-assistant thinking-bubble">' +
-        '<span class="thinking-status text-xs text-muted-foreground italic">Thinking\u2026</span>' +
-      '</div>';
-    ml.appendChild(wrap);
-    scrollToBottom();
-    return wrap;
-  }
-
-  function replaceThinkingBubble(wrap, content) {
-    var bubble = wrap.querySelector('.thinking-bubble');
-    if (!bubble) return;
-    bubble.classList.remove('thinking-bubble');
-    bubble.setAttribute('data-raw', content);
-    bubble.innerHTML = marked.parse(content);
-    scrollToBottom();
-  }
-
-  // activeES tracks the current open EventSource so we don't double-subscribe.
-  var activeES = null;
-  var activeRunID = null;
-  var pollTimer = null;
-
-  function startRunPoller(sessionID) {
-    if (!sessionID) return;
-    stopRunPoller();
-    pollTimer = setInterval(function() {
-      fetch('/chat/sessions/' + sessionID + '/run')
-        .then(function(res) {
-          if (res.status === 204) return null; // no active run
-          if (!res.ok) return null;
-          return res.text();
-        })
-        .then(function(runID) {
-          if (!runID || runID === activeRunID) return;
-          // A run is active that we're not yet watching — join it.
-          joinRun(runID, null, document.getElementById('chat-input'));
-        })
-        .catch(function() {});
-    }, 2000);
-  }
-
-  function stopRunPoller() {
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-  }
-
-  function joinRun(runID, thinkingWrap, input) {
-    if (activeES) { activeES.close(); }
-    activeRunID = runID;
-
-    // If no thinking bubble exists yet (observer joining mid-run), create one.
-    if (!thinkingWrap) {
-      thinkingWrap = appendThinkingBubble();
-    }
-
-    var es = new EventSource('/chat/runs/' + runID + '/events');
-    activeES = es;
-
-    es.addEventListener('status', function(e) {
-      var statusEl = thinkingWrap && thinkingWrap.querySelector('.thinking-status');
-      if (statusEl) statusEl.textContent = JSON.parse(e.data);
-      scrollToBottom();
-    });
-
-    es.addEventListener('done', function(e) {
-      es.close();
-      activeES = null;
-      activeRunID = null;
-      replaceThinkingBubble(thinkingWrap, JSON.parse(e.data));
-      if (input) { input.disabled = false; input.focus(); }
-    });
-
-    // Server-sent "event: error" — agent reported a real error.
-    es.addEventListener('error', function(e) {
-      if (!e.data) return; // connection-level event, not a server error — ignore
-      es.close();
-      activeES = null;
-      activeRunID = null;
-      var statusEl = thinkingWrap && thinkingWrap.querySelector('.thinking-status');
-      if (statusEl) {
-        statusEl.textContent = 'Error: ' + JSON.parse(e.data);
-        statusEl.classList.add('text-destructive');
-        statusEl.classList.remove('italic');
-      }
-      if (input) input.disabled = false;
-    });
-  }
-
-  function sendMessage(evt, sessionID) {
-    evt.preventDefault();
-    var input = document.getElementById('chat-input');
-    var text = input.value.trim();
-    if (!text) return;
-
-    input.value = '';
-    input.disabled = true;
-
-    appendUserBubble(text);
-    var thinkingWrap = appendThinkingBubble();
-
-    var fd = new FormData();
-    fd.append('message', text);
-
-    fetch('/chat/sessions/' + sessionID + '/messages', {
-      method: 'POST',
-      body: fd,
-    })
-    .then(function(res) {
-      if (!res.ok) throw new Error('request failed');
-      return res.text();
-    })
-    .then(function(runID) {
-      joinRun(runID, thinkingWrap, input);
-    })
-    .catch(function(err) {
-      var statusEl = thinkingWrap && thinkingWrap.querySelector('.thinking-status');
-      if (statusEl) {
-        statusEl.textContent = 'Error: ' + err.message;
-        statusEl.classList.add('text-destructive');
-        statusEl.classList.remove('italic');
-      }
-      input.disabled = false;
-    });
-  }
-  </script>
 </div>
 {{else}}
 <div class="flex flex-col h-full">
   <div class="border-b px-4 py-3 flex items-center gap-3 shrink-0 bg-background">
-    <button class="sidebar-toggle" onclick="toggleSidebar()" aria-label="Toggle sidebar">
+    <label for="sidebar-toggle" class="sidebar-toggle-btn" aria-label="Toggle sidebar">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>
       </svg>
-    </button>
+    </label>
   </div>
   <div class="flex-1 flex items-center justify-center">
     <div class="text-center max-w-xs">
       <div class="text-muted-foreground/30 text-5xl mb-4">💬</div>
       <p class="text-sm font-medium text-foreground mb-1">No chat selected</p>
       <p class="text-xs text-muted-foreground">
-        Start a new chat using the button on the left.
+        Choose an agent and start a chat using the panel on the left.
       </p>
     </div>
   </div>
@@ -506,8 +351,41 @@
 </div>
 {{else}}
 <div class="flex justify-start">
-  <div class="msg-assistant" data-raw="{{.Content}}"></div>
+  <div class="msg-assistant">{{renderMarkdown .Content}}</div>
 </div>
 {{end}}
 {{end}}
 {{end}}
+
+{{/* Returned by POST /chat/sessions — chat-content + OOB session list update */}}
+{{define "new-session-response"}}
+{{/* OOB: refresh session list in sidebar */}}
+<div id="session-list" hx-swap-oob="true">
+  {{template "session-list" .}}
+</div>
+{{/* Main body (swapped into #chat-main): open the new chat */}}
+{{template "chat-content" .}}
+{{end}}
+
+{{/* Returned by POST /chat/sessions/{id}/messages — appended to #message-list */}}
+{{define "post-message-response"}}
+{{/* OOB: user bubble appended first */}}
+<div hx-swap-oob="beforeend:#message-list">
+  <div class="flex justify-end">
+    <div class="msg-user">{{.Content}}</div>
+  </div>
+</div>
+{{/* Main body: thinking container with SSE — appended second by form's hx-swap="beforeend" */}}
+<div id="run-{{.RunID}}"
+     hx-ext="sse"
+     sse-connect="/chat/runs/{{.RunID}}/events"
+     sse-swap="done"
+     hx-swap="outerHTML">
+  <div class="flex justify-start">
+    <div class="msg-assistant">
+      <span class="thinking-status" sse-swap="status" hx-swap="innerHTML">Thinking…</span>
+    </div>
+  </div>
+</div>
+{{end}}
+
