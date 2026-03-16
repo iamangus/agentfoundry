@@ -14,6 +14,7 @@ import (
 
 	"github.com/angoo/agentfile/internal/agent"
 	"github.com/angoo/agentfile/internal/config"
+	"github.com/angoo/agentfile/internal/llm"
 	"github.com/angoo/agentfile/internal/mcpclient"
 )
 
@@ -41,7 +42,8 @@ type Message struct {
 type Session struct {
 	ID          string
 	AgentName   string
-	Messages    []Message
+	Messages    []Message     // display history (user + assistant text only)
+	LLMHistory  []llm.Message // full LLM message history (excluding system prompt) for context replay
 	CreatedAt   time.Time
 	ActiveRunID string // set while an agent run is in progress
 }
@@ -319,10 +321,17 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 		var result string
 		var err error
 
+		// Snapshot the current LLM history to pass into the agent.
+		h.mu.Lock()
+		history := make([]llm.Message, len(session.LLMHistory))
+		copy(history, session.LLMHistory)
+		h.mu.Unlock()
+
+		var updatedHistory []llm.Message
 		if def == nil {
 			err = fmt.Errorf("agent %q not found", session.AgentName)
 		} else {
-			result, err = h.runtime.RunWithReporter(ctx, def, content, rep)
+			result, updatedHistory, err = h.runtime.RunWithReporter(ctx, def, content, rep, history)
 		}
 
 		// Append to session and publish terminal event as an HTML fragment.
@@ -340,6 +349,8 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 				Content: result,
 				Time:    time.Now(),
 			})
+			// Persist the full LLM history so subsequent messages have context.
+			session.LLMHistory = updatedHistory
 		}
 		h.mu.Unlock()
 

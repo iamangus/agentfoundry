@@ -51,24 +51,28 @@ func report(r Reporter, status string) {
 
 // Run executes an agent with the given user input and returns the final text response.
 func (rt *Runtime) Run(ctx context.Context, def *config.Definition, userInput string, ephemeral ...*mcpclient.EphemeralConn) (string, error) {
-	return rt.RunWithReporter(ctx, def, userInput, nil, ephemeral...)
+	result, _, err := rt.RunWithReporter(ctx, def, userInput, nil, nil, ephemeral...)
+	return result, err
 }
 
 // RunWithReporter is like Run but emits status updates via r throughout execution.
+// history contains any prior conversation turns (from previous user/assistant exchanges)
+// and is prepended between the system prompt and the new user message.
 // Any ephemeral MCP connections provided will have their tools appended to the
 // agent's static tool list for the duration of this run only.
-func (rt *Runtime) RunWithReporter(ctx context.Context, def *config.Definition, userInput string, r Reporter, ephemeral ...*mcpclient.EphemeralConn) (string, error) {
-	slog.Info("agent run started", "agent", def.Name, "input_len", len(userInput))
+// It returns the final text response, the full updated message history, and any error.
+func (rt *Runtime) RunWithReporter(ctx context.Context, def *config.Definition, userInput string, r Reporter, history []llm.Message, ephemeral ...*mcpclient.EphemeralConn) (string, []llm.Message, error) {
+	slog.Info("agent run started", "agent", def.Name, "input_len", len(userInput), "history_len", len(history))
 	report(r, "Thinking…")
 
 	// Build tool definitions for the LLM
 	toolDefs, toolMap := rt.buildToolSet(def, ephemeral)
 
-	// Initialize conversation
-	messages := []llm.Message{
-		{Role: "system", Content: def.SystemPrompt},
-		{Role: "user", Content: userInput},
-	}
+	// Initialize conversation: system prompt + prior history + new user message
+	messages := make([]llm.Message, 0, 2+len(history))
+	messages = append(messages, llm.Message{Role: "system", Content: def.SystemPrompt})
+	messages = append(messages, history...)
+	messages = append(messages, llm.Message{Role: "user", Content: userInput})
 
 	maxTurns := def.MaxTurns
 	if maxTurns == 0 {
@@ -88,11 +92,11 @@ func (rt *Runtime) RunWithReporter(ctx context.Context, def *config.Definition, 
 
 		resp, err := rt.llmClient.ChatCompletion(ctx, req)
 		if err != nil {
-			return "", fmt.Errorf("llm call failed on turn %d: %w", turn, err)
+			return "", messages, fmt.Errorf("llm call failed on turn %d: %w", turn, err)
 		}
 
 		if len(resp.Choices) == 0 {
-			return "", fmt.Errorf("no choices in LLM response on turn %d", turn)
+			return "", messages, fmt.Errorf("no choices in LLM response on turn %d", turn)
 		}
 
 		choice := resp.Choices[0]
@@ -105,7 +109,9 @@ func (rt *Runtime) RunWithReporter(ctx context.Context, def *config.Definition, 
 		if len(assistantMsg.ToolCalls) == 0 {
 			content, _ := assistantMsg.Content.(string)
 			slog.Info("agent run completed", "agent", def.Name, "turns", turn+1)
-			return content, nil
+			// Return history excluding the system prompt so it can be replayed next turn.
+			// Slice off the leading system message: messages[1:] = history + new user msg + assistant reply.
+			return content, messages[1:], nil
 		}
 
 		// Process tool calls
@@ -131,7 +137,7 @@ func (rt *Runtime) RunWithReporter(ctx context.Context, def *config.Definition, 
 		report(r, "Thinking…")
 	}
 
-	return "", fmt.Errorf("agent %s exceeded max turns (%d)", def.Name, maxTurns)
+	return "", messages[1:], fmt.Errorf("agent %s exceeded max turns (%d)", def.Name, maxTurns)
 }
 
 // toolStatus returns a human-readable status string for a tool call.
@@ -271,8 +277,9 @@ func (rt *Runtime) executeTool(ctx context.Context, tc llm.ToolCall, toolMap map
 			return "", fmt.Errorf("parse agent call input: %w", err)
 		}
 		slog.Info("tool call: agent", "agent", ref.agentDef.Name, "input_len", len(params.Message))
-		// Sub-agents do not inherit ephemeral connections from the parent run.
-		return rt.RunWithReporter(ctx, ref.agentDef, params.Message, r)
+		// Sub-agents do not inherit ephemeral connections or history from the parent run.
+		result, _, err := rt.RunWithReporter(ctx, ref.agentDef, params.Message, r, nil)
+		return result, err
 	}
 
 	// MCP tool call
