@@ -87,6 +87,10 @@ func (rt *Runtime) RunWithReporter(ctx context.Context, def *config.Definition, 
 	if rt.logger != nil {
 		rl = rt.logger.ForRun(def.Name, model)
 		rl.Start(userInput)
+		if len(history) > 0 {
+			rl.HistorySummary(len(history))
+		}
+		rl.Tools(toolNames)
 		rl.SystemPrompt(def.SystemPrompt)
 		rl.UserMessage(userInput)
 	}
@@ -154,7 +158,8 @@ func (rt *Runtime) RunWithReporter(ctx context.Context, def *config.Definition, 
 
 		// Process tool calls
 		if rl != nil {
-			rl.AssistantToolCalls()
+			textContent, _ := assistantMsg.Content.(string)
+			rl.AssistantToolCalls(textContent)
 		}
 		for _, tc := range assistantMsg.ToolCalls {
 			report(r, toolStatus(tc.Function.Name, toolMap))
@@ -182,6 +187,16 @@ func (rt *Runtime) RunWithReporter(ctx context.Context, def *config.Definition, 
 				slog.Warn("tool call failed", "agent", def.Name, "tool", tc.Function.Name, "error", err)
 			} else {
 				resultContent = result
+			}
+
+			// Log the result (after the call)
+			if rl != nil {
+				ref := toolMap[tc.Function.Name]
+				if ref != nil && ref.agentDef != nil {
+					rl.SubAgentResult(ref.agentDef.Name, resultContent)
+				} else {
+					rl.ToolResult(tc.Function.Name, resultContent)
+				}
 			}
 
 			messages = append(messages, llm.Message{

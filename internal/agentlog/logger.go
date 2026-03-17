@@ -117,6 +117,24 @@ func (rl *RunLog) Start(userInput string) {
 	rl.writeln(divider)
 }
 
+// HistorySummary logs how many prior messages are being prepended to the context.
+// Only called when historyLen > 0.
+func (rl *RunLog) HistorySummary(historyLen int) {
+	rl.writeln(fmt.Sprintf("\n--- CONTEXT ---"))
+	rl.writeln(fmt.Sprintf("  History: %d prior message(s) prepended", historyLen))
+}
+
+// Tools logs the names of all tool definitions being sent to the LLM.
+func (rl *RunLog) Tools(names []string) {
+	if len(names) == 0 {
+		return
+	}
+	rl.writeln("\n--- TOOLS SENT TO LLM ---")
+	for _, n := range names {
+		rl.writeln(fmt.Sprintf("  - %s", n))
+	}
+}
+
 // SystemPrompt logs the agent's system prompt.
 func (rl *RunLog) SystemPrompt(prompt string) {
 	rl.writeln("\n--- SYSTEM PROMPT ---")
@@ -140,8 +158,13 @@ func (rl *RunLog) AssistantText(text string) {
 	rl.writeln(indent(text, "  "))
 }
 
-// AssistantToolCalls writes the header for a turn where the assistant made tool calls.
-func (rl *RunLog) AssistantToolCalls() {
+// AssistantToolCalls writes the header for a turn where the assistant made tool calls,
+// optionally including any text content the assistant produced alongside the calls.
+func (rl *RunLog) AssistantToolCalls(textContent string) {
+	if strings.TrimSpace(textContent) != "" {
+		rl.writeln("\n[ASSISTANT - thinking]")
+		rl.writeln(indent(textContent, "  "))
+	}
 	rl.writeln("\n[ASSISTANT - tool calls]")
 }
 
@@ -152,10 +175,22 @@ func (rl *RunLog) ToolCall(llmName string, rawArgs string) {
 	rl.writeln(indent(prettyArgs, "    "))
 }
 
+// ToolResult logs the content returned by a tool.
+func (rl *RunLog) ToolResult(llmName string, result string) {
+	rl.writeln(fmt.Sprintf("\n  [RESULT: %s]", llmName))
+	rl.writeln(indent(result, "    "))
+}
+
 // SubAgentCall logs when a sub-agent is invoked as a tool.
 func (rl *RunLog) SubAgentCall(agentName, message string) {
 	rl.writeln(fmt.Sprintf("\n  [SUB-AGENT: %s]", agentName))
 	rl.writeln(indent(message, "    "))
+}
+
+// SubAgentResult logs the response returned by a sub-agent.
+func (rl *RunLog) SubAgentResult(agentName, result string) {
+	rl.writeln(fmt.Sprintf("\n  [SUB-AGENT RESULT: %s]", agentName))
+	rl.writeln(indent(result, "    "))
 }
 
 // Completed writes the run footer with timing and turn count.
