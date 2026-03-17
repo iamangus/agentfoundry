@@ -9,6 +9,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/angoo/agentfile/internal/agentlog"
 	"github.com/angoo/agentfile/internal/config"
 	"github.com/angoo/agentfile/internal/llm"
 	"github.com/angoo/agentfile/internal/mcpclient"
@@ -31,6 +32,7 @@ type Runtime struct {
 	resolver  AgentResolver
 	pool      *mcpclient.Pool
 	llmClient llm.Client
+	logger    *agentlog.Logger // optional; nil disables run logging
 }
 
 // NewRuntime creates a new agent runtime.
@@ -40,6 +42,12 @@ func NewRuntime(resolver AgentResolver, pool *mcpclient.Pool, llmClient llm.Clie
 		pool:      pool,
 		llmClient: llmClient,
 	}
+}
+
+// SetLogger attaches a run logger to the runtime. Must be called before any
+// runs start; it is not safe to call concurrently with Run/RunWithReporter.
+func (rt *Runtime) SetLogger(l *agentlog.Logger) {
+	rt.logger = l
 }
 
 // report sends a status update if r is non-nil.
@@ -73,6 +81,16 @@ func (rt *Runtime) RunWithReporter(ctx context.Context, def *config.Definition, 
 	}
 	slog.Info("agent run started", "agent", def.Name, "tools", toolNames, "input_len", len(userInput), "history_len", len(history))
 
+	// Start run log
+	model := def.Model
+	var rl *agentlog.RunLog
+	if rt.logger != nil {
+		rl = rt.logger.ForRun(def.Name, model)
+		rl.Start(userInput)
+		rl.SystemPrompt(def.SystemPrompt)
+		rl.UserMessage(userInput)
+	}
+
 	// Initialize conversation: system prompt + prior history + new user message
 	messages := make([]llm.Message, 0, 2+len(history))
 	messages = append(messages, llm.Message{Role: "system", Content: def.SystemPrompt})
@@ -86,6 +104,9 @@ func (rt *Runtime) RunWithReporter(ctx context.Context, def *config.Definition, 
 
 	for turn := 0; turn < maxTurns; turn++ {
 		slog.Debug("agent turn", "agent", def.Name, "turn", turn)
+		if rl != nil {
+			rl.Turn(turn + 1)
+		}
 
 		req := &llm.ChatRequest{
 			Model:    def.Model,
@@ -97,11 +118,19 @@ func (rt *Runtime) RunWithReporter(ctx context.Context, def *config.Definition, 
 
 		resp, err := rt.llmClient.ChatCompletion(ctx, req)
 		if err != nil {
-			return "", messages, fmt.Errorf("llm call failed on turn %d: %w", turn, err)
+			runErr := fmt.Errorf("llm call failed on turn %d: %w", turn, err)
+			if rl != nil {
+				rl.Failed(runErr)
+			}
+			return "", messages, runErr
 		}
 
 		if len(resp.Choices) == 0 {
-			return "", messages, fmt.Errorf("no choices in LLM response on turn %d", turn)
+			runErr := fmt.Errorf("no choices in LLM response on turn %d", turn)
+			if rl != nil {
+				rl.Failed(runErr)
+			}
+			return "", messages, runErr
 		}
 
 		choice := resp.Choices[0]
@@ -114,14 +143,37 @@ func (rt *Runtime) RunWithReporter(ctx context.Context, def *config.Definition, 
 		if len(assistantMsg.ToolCalls) == 0 {
 			content, _ := assistantMsg.Content.(string)
 			slog.Info("agent run completed", "agent", def.Name, "turns", turn+1)
+			if rl != nil {
+				rl.AssistantText(content)
+				rl.Completed(turn + 1)
+			}
 			// Return history excluding the system prompt so it can be replayed next turn.
 			// Slice off the leading system message: messages[1:] = history + new user msg + assistant reply.
 			return content, messages[1:], nil
 		}
 
 		// Process tool calls
+		if rl != nil {
+			rl.AssistantToolCalls()
+		}
 		for _, tc := range assistantMsg.ToolCalls {
 			report(r, toolStatus(tc.Function.Name, toolMap))
+
+			// Log the tool call before executing it
+			if rl != nil {
+				ref := toolMap[tc.Function.Name]
+				if ref != nil && ref.agentDef != nil {
+					// Sub-agent: parse the message argument for the log
+					var params struct {
+						Message string `json:"message"`
+					}
+					_ = json.Unmarshal([]byte(tc.Function.Arguments), &params)
+					rl.SubAgentCall(ref.agentDef.Name, params.Message)
+				} else {
+					rl.ToolCall(tc.Function.Name, tc.Function.Arguments)
+				}
+			}
+
 			result, err := rt.executeTool(ctx, tc, toolMap, r)
 
 			var resultContent string
@@ -142,7 +194,11 @@ func (rt *Runtime) RunWithReporter(ctx context.Context, def *config.Definition, 
 		report(r, "Thinking…")
 	}
 
-	return "", messages[1:], fmt.Errorf("agent %s exceeded max turns (%d)", def.Name, maxTurns)
+	runErr := fmt.Errorf("agent %s exceeded max turns (%d)", def.Name, maxTurns)
+	if rl != nil {
+		rl.Failed(runErr)
+	}
+	return "", messages[1:], runErr
 }
 
 // toolStatus returns a human-readable status string for a tool call.

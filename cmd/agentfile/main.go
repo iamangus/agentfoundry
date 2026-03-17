@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/angoo/agentfile/internal/agent"
+	"github.com/angoo/agentfile/internal/agentlog"
 	"github.com/angoo/agentfile/internal/api"
 	"github.com/angoo/agentfile/internal/config"
 	"github.com/angoo/agentfile/internal/llm"
@@ -75,6 +76,15 @@ func main() {
 		slog.Warn("failed to start filesystem watcher", "error", err)
 	}
 	defer loader.Close()
+
+	// Set up per-agent run logging (files are truncated so each startup is a fresh session)
+	runLogger, err := agentlog.New("logs", reg.ListAgentNames())
+	if err != nil {
+		slog.Warn("failed to initialise run logger, proceeding without file logging", "error", err)
+	} else {
+		agentRuntime.SetLogger(runLogger)
+		slog.Info("run logging enabled", "dir", "logs")
+	}
 
 	// Set up HTTP mux
 	mux := http.NewServeMux()
