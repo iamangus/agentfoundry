@@ -1,6 +1,6 @@
 # agentfile
 
-A system for defining and running AI agents via YAML configuration. Agents are backed by LLMs (via OpenRouter) and have access to tools discovered from external MCP servers. Each agent is exposed as its own MCP server, so agents can be composed — one agent can call another as a tool.
+A system for defining and running AI agents via YAML configuration. Agents are backed by any OpenAI-compatible LLM API (OpenRouter, OpenAI, Ollama, Together AI, Azure OpenAI, etc.) and have access to tools discovered from external MCP servers. Each agent is exposed as its own MCP server, so agents can be composed — one agent can call another as a tool.
 
 ## Concepts
 
@@ -17,13 +17,13 @@ A system for defining and running AI agents via YAML configuration. Agents are b
 ### Prerequisites
 
 - Go 1.21+
-- An [OpenRouter](https://openrouter.ai/) API key
+- An API key for any OpenAI-compatible provider ([OpenRouter](https://openrouter.ai/), [OpenAI](https://platform.openai.com/), [Together AI](https://www.together.ai/), or a local [Ollama](https://ollama.com/) instance)
 
 ### Build and Run
 
 ```bash
 go build -o agentfile ./cmd/agentfile/
-export OPENROUTER_API_KEY="sk-or-..."
+export OPENROUTER_API_KEY="sk-or-..."   # or any OpenAI-compatible API key
 ./agentfile
 ```
 
@@ -47,9 +47,14 @@ The container stores all persistent data under `/data` (definitions and config).
 listen: ":3000"
 definitions_dir: "./definitions"
 
-openrouter:
+# Works with any OpenAI-compatible API
+llm:
+  base_url: "https://openrouter.ai/api/v1"   # or https://api.openai.com/v1, etc.
   api_key: "${OPENROUTER_API_KEY}"
   default_model: "openai/gpt-4o"
+  headers:
+    HTTP-Referer: "https://github.com/angoo/agentfile"
+    X-Title: "agentfile"
 
 mcp_servers:
   - name: "srvd"
@@ -160,7 +165,7 @@ agentfile/
 │   ├── mcpclient/              # MCP client pool (connects to external servers)
 │   ├── agent/                  # Agent runtime (LLM conversation loop)
 │   ├── mcp/                    # Per-agent Streamable HTTP MCP servers
-│   ├── llm/                    # OpenRouter client
+│   ├── llm/                    # OpenAI-compatible LLM client
 │   └── api/                    # REST API
 ├── definitions/                # Agent YAML definitions (hot-reloaded)
 ├── agentfile.yaml              # System configuration

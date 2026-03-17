@@ -52,8 +52,13 @@ func main() {
 		slog.Info("no external MCP servers configured")
 	}
 
-	// Create OpenRouter LLM client
-	llmClient := llm.NewOpenRouterClient(cfg.OpenRouter.APIKey, cfg.OpenRouter.DefaultModel)
+	// Create LLM client (works with any OpenAI-compatible API)
+	llmClient := llm.NewClient(llm.ClientConfig{
+		BaseURL:      cfg.LLM.BaseURL,
+		APIKey:       cfg.LLM.APIKey,
+		DefaultModel: cfg.LLM.DefaultModel,
+		Headers:      cfg.LLM.Headers,
+	})
 
 	// Create agent runtime
 	agentRuntime := agent.NewRuntime(reg, pool, llmClient)

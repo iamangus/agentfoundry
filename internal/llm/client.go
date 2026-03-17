@@ -10,26 +10,67 @@ import (
 	"time"
 )
 
-const openRouterBaseURL = "https://openrouter.ai/api/v1"
+// Default base URL — OpenRouter is the default for backward compatibility.
+const defaultBaseURL = "https://openrouter.ai/api/v1"
 
 // Client is the interface for LLM providers.
 type Client interface {
 	ChatCompletion(ctx context.Context, req *ChatRequest) (*ChatResponse, error)
 }
 
-// OpenRouterClient implements Client using the OpenRouter API.
-type OpenRouterClient struct {
+// ClientConfig holds configuration for an OpenAI-compatible LLM client.
+type ClientConfig struct {
+	// BaseURL is the API base URL (e.g. "https://openrouter.ai/api/v1",
+	// "https://api.openai.com/v1"). The client appends "/chat/completions".
+	BaseURL string
+
+	// APIKey is the bearer token for authentication.
+	APIKey string
+
+	// DefaultModel is used when a request doesn't specify a model.
+	DefaultModel string
+
+	// Headers are extra HTTP headers sent with every request.
+	// Useful for provider-specific headers like OpenRouter's HTTP-Referer / X-Title.
+	Headers map[string]string
+}
+
+// OpenAIClient implements Client for any OpenAI-compatible API.
+type OpenAIClient struct {
+	baseURL      string
 	apiKey       string
 	defaultModel string
+	headers      map[string]string
 	httpClient   *http.Client
 }
 
-func NewOpenRouterClient(apiKey, defaultModel string) *OpenRouterClient {
-	return &OpenRouterClient{
-		apiKey:       apiKey,
-		defaultModel: defaultModel,
+// NewClient creates a new OpenAI-compatible LLM client.
+func NewClient(cfg ClientConfig) *OpenAIClient {
+	baseURL := cfg.BaseURL
+	if baseURL == "" {
+		baseURL = defaultBaseURL
+	}
+	return &OpenAIClient{
+		baseURL:      baseURL,
+		apiKey:       cfg.APIKey,
+		defaultModel: cfg.DefaultModel,
+		headers:      cfg.Headers,
 		httpClient:   &http.Client{Timeout: 120 * time.Second},
 	}
+}
+
+// NewOpenRouterClient creates a client pre-configured for OpenRouter.
+// Kept for backward compatibility.
+func NewOpenRouterClient(apiKey, defaultModel string) *OpenAIClient {
+	return NewClient(ClientConfig{
+		BaseURL:      "https://openrouter.ai/api/v1",
+		APIKey:       apiKey,
+		DefaultModel: defaultModel,
+		Headers: map[string]string{
+			"HTTP-Referer": "https://github.com/angoo/agentfile",
+			"X-Title":      "agentfile",
+		},
+	})
 }
 
 // ChatRequest represents a chat completion request.
@@ -94,8 +135,8 @@ type Usage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
-// ChatCompletion sends a chat completion request to OpenRouter.
-func (c *OpenRouterClient) ChatCompletion(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
+// ChatCompletion sends a chat completion request to the configured API endpoint.
+func (c *OpenAIClient) ChatCompletion(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
 	if req.Model == "" {
 		req.Model = c.defaultModel
 	}
@@ -105,15 +146,18 @@ func (c *OpenRouterClient) ChatCompletion(ctx context.Context, req *ChatRequest)
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", openRouterBaseURL+"/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	httpReq.Header.Set("HTTP-Referer", "https://github.com/angoo/agentfile")
-	httpReq.Header.Set("X-Title", "agentfile")
+
+	// Set any extra provider-specific headers.
+	for k, v := range c.headers {
+		httpReq.Header.Set(k, v)
+	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -127,7 +171,7 @@ func (c *OpenRouterClient) ChatCompletion(ctx context.Context, req *ChatRequest)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("openrouter API error %d: %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("LLM API error %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var chatResp ChatResponse
