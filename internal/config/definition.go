@@ -3,13 +3,14 @@ package config
 // Definition is the structure parsed from a YAML file.
 // It represents an agent definition.
 type Definition struct {
-	Kind         Kind     `yaml:"kind" json:"kind"`
-	Name         string   `yaml:"name" json:"name"`
-	Description  string   `yaml:"description" json:"description"`
-	Model        string   `yaml:"model,omitempty" json:"model,omitempty"`
-	SystemPrompt string   `yaml:"system_prompt" json:"system_prompt"`
-	Tools        []string `yaml:"tools,omitempty" json:"tools,omitempty"` // namespaced: "server.tool" or agent name
-	MaxTurns     int      `yaml:"max_turns,omitempty" json:"max_turns,omitempty"`
+	Kind               Kind     `yaml:"kind" json:"kind"`
+	Name               string   `yaml:"name" json:"name"`
+	Description        string   `yaml:"description" json:"description"`
+	Model              string   `yaml:"model,omitempty" json:"model,omitempty"`
+	SystemPrompt       string   `yaml:"system_prompt" json:"system_prompt"`
+	Tools              []string `yaml:"tools,omitempty" json:"tools,omitempty"` // namespaced: "server.tool" or agent name
+	MaxTurns           int      `yaml:"max_turns,omitempty" json:"max_turns,omitempty"`
+	MaxConcurrentTools int      `yaml:"max_concurrent_tools,omitempty" json:"max_concurrent_tools,omitempty"`
 }
 
 // Kind represents the type of definition.

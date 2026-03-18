@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
@@ -182,23 +183,48 @@ func (rt *Runtime) RunWithReporter(ctx context.Context, def *config.Definition, 
 			return content, messages[1:], nil
 		}
 
-		// Process tool calls
-		for _, tc := range assistantMsg.ToolCalls {
-			report(r, toolStatus(tc.Function.Name, toolMap))
-			result, err := rt.executeTool(ctx, tc, toolMap, r)
+		// Process tool calls in parallel, bounded by MaxConcurrentTools.
+		// 0 (default) = unlimited; 1 = serial; N > 1 = capped at N.
+		type toolResult struct {
+			toolCallID string
+			content    string
+		}
 
-			var resultContent string
-			if err != nil {
-				resultContent = fmt.Sprintf("Error: %s", err.Error())
-				slog.Warn("tool call failed", "agent", def.Name, "tool", tc.Function.Name, "error", err)
-			} else {
-				resultContent = result
-			}
+		results := make([]toolResult, len(assistantMsg.ToolCalls))
 
+		var sem chan struct{}
+		if def.MaxConcurrentTools == 1 {
+			sem = make(chan struct{}, 1)
+		} else if def.MaxConcurrentTools > 1 {
+			sem = make(chan struct{}, def.MaxConcurrentTools)
+		}
+
+		var wg sync.WaitGroup
+		for i, tc := range assistantMsg.ToolCalls {
+			wg.Add(1)
+			go func(i int, tc llm.ToolCall) {
+				defer wg.Done()
+				if sem != nil {
+					sem <- struct{}{}
+					defer func() { <-sem }()
+				}
+				report(r, toolStatus(tc.Function.Name, toolMap))
+				result, err := rt.executeTool(ctx, tc, toolMap, r)
+				if err != nil {
+					slog.Warn("tool call failed", "agent", def.Name, "tool", tc.Function.Name, "error", err)
+					results[i] = toolResult{toolCallID: tc.ID, content: fmt.Sprintf("Error: %s", err.Error())}
+				} else {
+					results[i] = toolResult{toolCallID: tc.ID, content: result}
+				}
+			}(i, tc)
+		}
+		wg.Wait()
+
+		for _, res := range results {
 			messages = append(messages, llm.Message{
 				Role:       "tool",
-				Content:    resultContent,
-				ToolCallID: tc.ID,
+				Content:    res.content,
+				ToolCallID: res.toolCallID,
 			})
 		}
 
