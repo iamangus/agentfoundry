@@ -14,6 +14,7 @@ type SystemConfig struct {
 	DefinitionsDir string                   `yaml:"definitions_dir"`
 	LLM            LLMConf                  `yaml:"llm"`
 	MCPServers     []mcpclient.ServerConfig `yaml:"mcp_servers"`
+	SummaryAgent   string                   `yaml:"summary_agent,omitempty"`
 
 	// OpenRouter is the legacy config key. If present and LLM is not configured,
 	// it is used as a shorthand that sets BaseURL to OpenRouter and adds the
@@ -105,6 +106,11 @@ func LoadSystem(path string) (*SystemConfig, error) {
 		for k, v := range cfg.MCPServers[i].Headers {
 			cfg.MCPServers[i].Headers[k] = expandEnvVar(v)
 		}
+	}
+
+	// Apply env var fallback for summary agent.
+	if cfg.SummaryAgent == "" {
+		cfg.SummaryAgent = os.Getenv("TOOL_SUMMARY_AGENT")
 	}
 
 	return cfg, nil
