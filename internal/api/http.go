@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -28,23 +29,25 @@ type DefinitionStore interface {
 
 // Handler serves the REST API.
 type Handler struct {
-	store        DefinitionStore
-	reg          *registry.Registry
-	pool         *mcpclient.Pool
-	agentRuntime *agent.Runtime
-	runs         *RunManager
-	history      *HistoryManager
+	store            DefinitionStore
+	reg              *registry.Registry
+	pool             *mcpclient.Pool
+	agentRuntime     *agent.Runtime
+	runs             *RunManager
+	history          *HistoryManager
+	summaryAgentName string
 }
 
 // NewHandler creates a new API handler.
-func NewHandler(reg *registry.Registry, pool *mcpclient.Pool, store DefinitionStore, agentRuntime *agent.Runtime, history *HistoryManager) *Handler {
+func NewHandler(reg *registry.Registry, pool *mcpclient.Pool, store DefinitionStore, agentRuntime *agent.Runtime, history *HistoryManager, summaryAgentName string) *Handler {
 	return &Handler{
-		store:        store,
-		reg:          reg,
-		pool:         pool,
-		agentRuntime: agentRuntime,
-		runs:         NewRunManager(),
-		history:      history,
+		store:            store,
+		reg:              reg,
+		pool:             pool,
+		agentRuntime:     agentRuntime,
+		runs:             NewRunManager(),
+		history:          history,
+		summaryAgentName: summaryAgentName,
 	}
 }
 
@@ -236,7 +239,12 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 		h.history.SetRunning(runID)
 
 		// Create a history adapter that implements agent.HistoryRecorder
-		hr := &historyRecorderAdapter{hm: h.history, runID: runID}
+		hr := &historyRecorderAdapter{
+			hm:               h.history,
+			runID:            runID,
+			runtime:          h.agentRuntime,
+			summaryAgentName: h.summaryAgentName,
+		}
 
 		result, _, err := h.agentRuntime.RunWithHistory(ctx, defSnap, msgSnap, nil, hr, historySnap, ephemeral...)
 		if err != nil {
@@ -305,8 +313,10 @@ func (h *Handler) getRunHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 type historyRecorderAdapter struct {
-	hm    *HistoryManager
-	runID string
+	hm               *HistoryManager
+	runID            string
+	runtime          *agent.Runtime
+	summaryAgentName string
 }
 
 func (a *historyRecorderAdapter) StartTurn(turnNum int) {
@@ -338,6 +348,66 @@ func (a *historyRecorderAdapter) EndToolCall(result string, status agent.ToolCal
 		s = ToolCallStatusError
 	}
 	a.hm.EndToolCall(a.runID, result, s, errMsg)
+
+	// Fire async summarization if configured.
+	if a.summaryAgentName == "" || a.runtime == nil {
+		return
+	}
+	// Capture values needed by the goroutine before it runs.
+	// We need the tool call ID — grab it from the just-committed record.
+	var toolCallID, toolName, arguments string
+	func() {
+		a.hm.mu.RLock()
+		defer a.hm.mu.RUnlock()
+		h, ok := a.hm.runs[a.runID]
+		if !ok || len(h.Turns) == 0 {
+			return
+		}
+		lastTurn := h.Turns[len(h.Turns)-1]
+		if len(lastTurn.ToolCalls) == 0 {
+			return
+		}
+		last := lastTurn.ToolCalls[len(lastTurn.ToolCalls)-1]
+		toolCallID = last.ID
+		toolName = last.Name
+		arguments = last.Arguments
+	}()
+	if toolCallID == "" {
+		return
+	}
+	runID := a.runID
+	hm := a.hm
+	rt := a.runtime
+	agentName := a.summaryAgentName
+	resultSnap := result
+
+	go func() {
+		def, ok := rt.GetAgentDef(agentName)
+		if !ok {
+			return
+		}
+		prompt := "Tool: " + toolName +
+			"\nArguments: " + truncateStr(arguments, 500) +
+			"\nResult: " + truncateStr(resultSnap, 1000)
+		resp, err := rt.Run(context.Background(), def, prompt)
+		if err != nil {
+			return
+		}
+		// Strip markdown code fences if the model wrapped the JSON.
+		resp = strings.TrimSpace(resp)
+		if strings.HasPrefix(resp, "```") {
+			if idx := strings.Index(resp[3:], "\n"); idx >= 0 {
+				resp = resp[3+idx+1:]
+			}
+			resp = strings.TrimSuffix(resp, "```")
+			resp = strings.TrimSpace(resp)
+		}
+		var summary ToolCallSummary
+		if err := json.Unmarshal([]byte(resp), &summary); err != nil {
+			return
+		}
+		hm.SetToolCallSummary(runID, toolCallID, summary)
+	}()
 }
 
 func (h *Handler) getRawAgent(w http.ResponseWriter, r *http.Request) {
@@ -365,6 +435,14 @@ func (h *Handler) updateAgentRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// truncateStr shortens s to at most n bytes, appending "…" if truncated.
+func truncateStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {

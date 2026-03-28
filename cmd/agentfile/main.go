@@ -108,7 +108,7 @@ func main() {
 	})
 
 	// REST API for agents and status
-	apiHandler := api.NewHandler(reg, pool, loader, agentRuntime, historyManager)
+	apiHandler := api.NewHandler(reg, pool, loader, agentRuntime, historyManager, cfg.SummaryAgent)
 	apiHandler.RegisterRoutes(mux)
 
 	// Web UI (chat + agents + runs pages)

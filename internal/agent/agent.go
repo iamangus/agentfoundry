@@ -71,6 +71,11 @@ func (rt *Runtime) SetLogger(l *agentlog.Logger) {
 	rt.logger = l
 }
 
+// GetAgentDef resolves an agent definition by name.
+func (rt *Runtime) GetAgentDef(name string) (*config.Definition, bool) {
+	return rt.resolver.GetAgentDef(name)
+}
+
 // GetToolNames returns the list of tool names that an agent will have access to.
 func (rt *Runtime) GetToolNames(def *config.Definition, ephemeral []*mcpclient.EphemeralConn) []string {
 	toolDefs, _ := rt.buildToolSet(def, ephemeral)
