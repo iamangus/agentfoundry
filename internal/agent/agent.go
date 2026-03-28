@@ -144,6 +144,13 @@ func (rt *Runtime) RunWithHistory(ctx context.Context, def *config.Definition, u
 		maxTurns = 10
 	}
 
+	// Resolve structured output once before the turn loop.
+	// structured_output override > definition's structured_output > force_json
+	so := structuredOutput
+	if so == nil {
+		so = def.StructuredOutput
+	}
+
 	for turn := 0; turn < maxTurns; turn++ {
 		slog.Debug("agent turn", "agent", def.Name, "turn", turn)
 		if rl != nil {
@@ -159,11 +166,6 @@ func (rt *Runtime) RunWithHistory(ctx context.Context, def *config.Definition, u
 		}
 		if len(toolDefs) > 0 {
 			req.Tools = toolDefs
-		}
-		// Build response format: structured_output override > definition's structured_output > force_json
-		so := structuredOutput
-		if so == nil {
-			so = def.StructuredOutput
 		}
 		if so != nil {
 			req.ResponseFormat = &llm.ResponseFormat{

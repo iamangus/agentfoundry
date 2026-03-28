@@ -110,6 +110,25 @@ func TestRunWithHistory_OverrideReplacesDefinition(t *testing.T) {
 	}
 }
 
+func TestRunWithHistory_StructuredOutputWinsOverForceJSON(t *testing.T) {
+	client := &mockLLMClient{}
+	rt := newTestRuntime(client)
+	schema := json.RawMessage(`{"type":"object"}`)
+	def := &config.Definition{
+		Kind: config.KindAgent, Name: "test", SystemPrompt: "You are a test.",
+		ForceJSON:        true,
+		StructuredOutput: &config.StructuredOutput{Name: "result", Schema: schema},
+	}
+	rt.RunWithHistory(context.Background(), def, "hello", nil, nil, nil, nil)
+	rf := client.lastRequest.ResponseFormat
+	if rf == nil {
+		t.Fatal("expected ResponseFormat to be set")
+	}
+	if rf.Type != "json_schema" {
+		t.Errorf("got type=%q, want json_schema (StructuredOutput should win over ForceJSON)", rf.Type)
+	}
+}
+
 func TestRunWithHistory_OverrideNilUsesDefinition(t *testing.T) {
 	client := &mockLLMClient{}
 	rt := newTestRuntime(client)
