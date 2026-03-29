@@ -142,7 +142,14 @@
     {{end}}
   </a>
   <button
-    class="del-btn uk-button uk-button-danger uk-button-small text-xs ml-2"
+    class="del-btn uk-button uk-button-default uk-button-small text-xs ml-1"
+    style="padding: 1px 8px; border-radius: 5px;"
+    hx-post="/agents/{{.Name}}/clone"
+    hx-target="#agent-editor"
+    hx-swap="innerHTML"
+  >Clone</button>
+  <button
+    class="del-btn uk-button uk-button-danger uk-button-small text-xs ml-1"
     style="padding: 1px 8px; border-radius: 5px;"
     hx-delete="/agents/{{.Name}}"
     hx-target="#agent-list"
@@ -181,7 +188,7 @@
 
 {{define "agent-editor-new"}}
 <div class="flex flex-col h-full">
-  <!-- Editor header -->
+  <!-- Header -->
   <div class="flex items-center justify-between px-4 py-3 border-b shrink-0">
     <div class="flex items-center gap-2">
       <label for="sidebar-toggle" class="sidebar-toggle-btn" aria-label="Toggle sidebar">
@@ -190,38 +197,136 @@
         </svg>
       </label>
       <h2 class="text-sm font-semibold">New Agent</h2>
-      <span class="text-xs text-muted-foreground border rounded px-1.5 py-0.5" style="border-radius: 4px;">YAML</span>
     </div>
     <div class="flex items-center gap-3">
       <button
         type="submit"
-        form="yaml-form-new"
+        form="agent-form-new"
         class="uk-button uk-button-primary uk-button-small"
         style="border-radius: 6px; font-size: 12px; padding: 4px 14px;"
-      >
-        Save
-      </button>
+      >Save</button>
     </div>
   </div>
 
-  <!-- YAML form -->
-  <div class="flex-1 flex flex-col p-4 gap-2 overflow-hidden">
+  <!-- Form -->
+  <div class="flex-1 overflow-y-auto p-4">
     <form
-      id="yaml-form-new"
-      hx-post="/agents/yaml"
+      id="agent-form-new"
+      hx-post="/agents/form"
       hx-target="#agent-editor"
       hx-swap="innerHTML"
-      class="flex-1 flex flex-col overflow-hidden"
+      class="flex flex-col gap-4"
     >
-      <textarea
-        name="yaml"
-        class="uk-textarea yaml-editor"
-        spellcheck="false"
-        placeholder="Paste your agent YAML here..."
-      ></textarea>
+      <!-- Name (editable on new) -->
+      <div>
+        <label class="text-xs font-medium text-muted-foreground uppercase tracking-wide" style="display:block;margin-bottom:4px;">Name <span class="text-red-500">*</span></label>
+        <input type="text" name="name" class="uk-input" style="border-radius:6px;font-size:13px;" placeholder="my-agent" required />
+      </div>
+
+      <!-- Description -->
+      <div>
+        <label class="text-xs font-medium text-muted-foreground uppercase tracking-wide" style="display:block;margin-bottom:4px;">Description</label>
+        <input type="text" name="description" class="uk-input" style="border-radius:6px;font-size:13px;" placeholder="Short description of what this agent does" />
+      </div>
+
+      <!-- Model -->
+      <div>
+        <label class="text-xs font-medium text-muted-foreground uppercase tracking-wide" style="display:block;margin-bottom:4px;">Model</label>
+        <input type="text" name="model" class="uk-input" style="border-radius:6px;font-size:13px;" placeholder="system default" />
+      </div>
+
+      <!-- System Prompt -->
+      <div class="flex flex-col">
+        <label class="text-xs font-medium text-muted-foreground uppercase tracking-wide" style="display:block;margin-bottom:4px;">System Prompt <span class="text-red-500">*</span></label>
+        <textarea
+          name="system_prompt"
+          class="uk-textarea"
+          style="font-family:ui-monospace,monospace;font-size:13px;min-height:240px;resize:vertical;border-radius:6px;line-height:1.6;"
+          spellcheck="false"
+          placeholder="You are a helpful assistant..."
+        ></textarea>
+      </div>
+
+      <!-- Tools -->
+      <div>
+        <label class="text-xs font-medium text-muted-foreground uppercase tracking-wide" style="display:block;margin-bottom:4px;">
+          Tools <span class="normal-case font-normal">(one per line, e.g. <code>srvd.web_search</code>)</span>
+        </label>
+        <textarea
+          name="tools"
+          class="uk-textarea"
+          style="font-family:ui-monospace,monospace;font-size:12px;min-height:72px;resize:vertical;border-radius:6px;"
+          spellcheck="false"
+          placeholder="srvd.web_search&#10;srvd.web_url_read"
+        ></textarea>
+      </div>
+
+      <!-- Max Turns / Max Concurrent Tools -->
+      <div class="flex gap-4">
+        <div class="flex-1">
+          <label class="text-xs font-medium text-muted-foreground uppercase tracking-wide" style="display:block;margin-bottom:4px;">Max Turns</label>
+          <input type="number" name="max_turns" class="uk-input" style="border-radius:6px;font-size:13px;" placeholder="10" min="0" />
+        </div>
+        <div class="flex-1">
+          <label class="text-xs font-medium text-muted-foreground uppercase tracking-wide" style="display:block;margin-bottom:4px;">Max Concurrent Tools</label>
+          <input type="number" name="max_concurrent_tools" class="uk-input" style="border-radius:6px;font-size:13px;" placeholder="unlimited" min="0" />
+        </div>
+      </div>
+
+      <!-- Force JSON -->
+      <div style="border:1px solid hsl(var(--border));border-radius:8px;padding:12px 14px;">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;">
+          <input type="checkbox" name="force_json" value="true" style="width:15px;height:15px;" />
+          <span class="text-sm font-medium">Force JSON output <span class="text-xs text-muted-foreground font-normal">(json_object mode, no schema)</span></span>
+        </label>
+      </div>
+
+      <!-- Structured Output -->
+      <input type="hidden" name="structured_output_enabled" id="so-enabled-new" value="false" />
+      <input type="hidden" name="structured_output_json" id="so-json-new" value="" />
+      <div style="border:1px solid hsl(var(--border));border-radius:8px;padding:12px 14px;">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;">
+          <input
+            type="checkbox"
+            id="so-toggle-new"
+            onchange="toggleStructuredOutput('new')"
+            style="width:15px;height:15px;"
+          />
+          <span class="text-sm font-medium">Enable structured output (JSON Schema)</span>
+        </label>
+        <div id="so-panel-new" style="margin-top:10px;display:none;">
+          <p class="text-xs text-muted-foreground" style="margin-bottom:6px;">
+            JSON object with <code>name</code>, <code>schema</code>, and optionally <code>strict</code>.
+            Same object passed as <code>response_schema</code> in the run API.
+          </p>
+          <textarea
+            id="so-textarea-new"
+            class="uk-textarea"
+            style="font-family:ui-monospace,monospace;font-size:12px;min-height:140px;border-radius:6px;"
+            spellcheck="false"
+            placeholder='{"name": "result", "strict": true, "schema": {"type": "object", "properties": {}, "required": [], "additionalProperties": false}}'
+            oninput="syncStructuredOutput('new')"
+          ></textarea>
+        </div>
+      </div>
     </form>
   </div>
 </div>
+
+<script>
+function toggleStructuredOutput(name) {
+  var checkbox = document.getElementById('so-toggle-' + name);
+  var panel = document.getElementById('so-panel-' + name);
+  var enabledInput = document.getElementById('so-enabled-' + name);
+  panel.style.display = checkbox.checked ? 'block' : 'none';
+  enabledInput.value = checkbox.checked ? 'true' : 'false';
+}
+function syncStructuredOutput(name) {
+  var textarea = document.getElementById('so-textarea-' + name);
+  var jsonInput = document.getElementById('so-json-' + name);
+  jsonInput.value = textarea.value;
+}
+</script>
 {{end}}
 
 {{define "agent-editor"}}

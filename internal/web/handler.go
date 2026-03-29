@@ -644,8 +644,52 @@ func (h *Handler) createAgentFormNew(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// cloneAgentName returns the next available clone name for src.
+// exists is called to check whether a candidate name is already taken.
+// Returns an error if all 10 candidate names are taken.
+func cloneAgentName(src string, exists func(string) bool) (string, error) {
+	candidate := src + "-copy"
+	if !exists(candidate) {
+		return candidate, nil
+	}
+	for i := 2; i <= 10; i++ {
+		candidate = fmt.Sprintf("%s-copy-%d", src, i)
+		if !exists(candidate) {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("too many copies of %q", src)
+}
+
+// cloneAgent handles POST /agents/{name}/clone.
 func (h *Handler) cloneAgent(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	name := r.PathValue("name")
+	src := h.store.GetDefinition(name)
+	if src == nil {
+		http.Error(w, "agent not found: "+name, http.StatusNotFound)
+		return
+	}
+
+	cloneName, err := cloneAgentName(name, func(s string) bool {
+		return h.store.GetDefinition(s) != nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+
+	clone := *src
+	clone.Name = cloneName
+	if err := h.store.SaveDefinition(&clone); err != nil {
+		slog.Error("failed to clone agent", "source", name, "clone", cloneName, "error", err)
+		http.Error(w, "failed to clone", http.StatusInternalServerError)
+		return
+	}
+
+	h.renderPartial(w, "save-agent-response", saveYamlData{
+		Editor: agentEditorData{Def: &clone, StructuredOutputJSON: structuredOutputJSON(&clone)},
+		Agents: h.store.ListDefinitions(),
+	})
 }
 
 type saveYamlData struct {
