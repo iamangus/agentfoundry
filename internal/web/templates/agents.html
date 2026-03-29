@@ -141,21 +141,23 @@
     <span class="text-xs text-muted-foreground truncate mt-0.5">{{.Description}}</span>
     {{end}}
   </a>
-  <button
-    class="del-btn uk-button uk-button-default uk-button-small text-xs ml-1"
-    style="padding: 1px 8px; border-radius: 5px;"
-    hx-post="/agents/{{.Name}}/clone"
-    hx-target="#agent-editor"
-    hx-swap="innerHTML"
-  >Clone</button>
-  <button
-    class="del-btn uk-button uk-button-danger uk-button-small text-xs ml-1"
-    style="padding: 1px 8px; border-radius: 5px;"
-    hx-delete="/agents/{{.Name}}"
-    hx-target="#agent-list"
-    hx-swap="innerHTML"
-    hx-confirm="Delete agent {{.Name}}?"
-  >Del</button>
+  <div class="del-btn flex flex-col gap-1">
+    <button
+      class="uk-button uk-button-default uk-button-small text-xs"
+      style="padding: 1px 8px; border-radius: 5px;"
+      hx-post="/agents/{{.Name}}/clone"
+      hx-target="#agent-editor"
+      hx-swap="innerHTML"
+    >Clone</button>
+    <button
+      class="uk-button uk-button-danger uk-button-small text-xs"
+      style="padding: 1px 8px; border-radius: 5px;"
+      hx-delete="/agents/{{.Name}}"
+      hx-target="#agent-list"
+      hx-swap="innerHTML"
+      hx-confirm="Delete agent {{.Name}}?"
+    >Del</button>
+  </div>
 </div>
 {{else}}
 <div class="px-4 py-8 text-center">
@@ -360,6 +362,12 @@ function syncStructuredOutput(name) {
       hx-swap="innerHTML"
       class="flex flex-col gap-4"
     >
+      <!-- Name -->
+      <div>
+        <label class="text-xs font-medium text-muted-foreground uppercase tracking-wide" style="display:block;margin-bottom:4px;">Name</label>
+        <input type="text" name="name" value="{{.Def.Name}}" class="uk-input" style="border-radius:6px;font-size:13px;" placeholder="my-agent" required />
+      </div>
+
       <!-- Description -->
       <div>
         <label class="text-xs font-medium text-muted-foreground uppercase tracking-wide" style="display:block;margin-bottom:4px;">Description</label>

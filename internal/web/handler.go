@@ -573,25 +573,32 @@ func (h *Handler) newAgentEditor(w http.ResponseWriter, r *http.Request) {
 
 // saveAgentForm handles PUT /agents/{name} — saves an existing agent via the form UI.
 func (h *Handler) saveAgentForm(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
+	originalName := r.PathValue("name")
 	def, err := definitionFromForm(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	def.Name = name
+	newName := r.FormValue("name")
+
+	if newName != originalName {
+		if err := h.store.DeleteDefinition(originalName); err != nil {
+			slog.Error("failed to delete old agent on rename", "old_name", originalName, "error", err)
+		}
+	}
+	def.Name = newName
 
 	if err := def.Validate(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if err := h.store.SaveDefinition(def); err != nil {
-		slog.Error("failed to save agent", "name", name, "error", err)
+		slog.Error("failed to save agent", "name", newName, "error", err)
 		http.Error(w, "failed to save", http.StatusInternalServerError)
 		return
 	}
 
-	saved := h.store.GetDefinition(name)
+	saved := h.store.GetDefinition(newName)
 	if saved == nil {
 		saved = def
 	}
