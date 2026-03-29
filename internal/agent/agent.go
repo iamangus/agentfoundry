@@ -252,6 +252,43 @@ func (rt *Runtime) RunWithHistory(ctx context.Context, def *config.Definition, u
 			if so != nil || def.ForceJSON {
 				content = llm.StripCodeFences(content)
 			}
+
+			if so != nil {
+				if verr := llm.ValidateAgainstSchema(content, so.Schema); verr != nil {
+					slog.Warn("LLM response failed schema validation, retrying", "agent", def.Name, "turn", turn+1, "error", verr)
+					messages = append(messages, llm.Message{
+						Role: "user",
+						Content: fmt.Sprintf(
+							"Your previous response did not conform to the required JSON schema. "+
+								"Validation error: %s\n\n"+
+								"Please try again, returning ONLY valid JSON that matches the schema exactly.",
+							verr,
+						),
+					})
+					if hr != nil {
+						hr.EndTurn()
+					}
+					continue
+				}
+			} else if def.ForceJSON {
+				if jerr := llm.IsValidJSON(content); jerr != nil {
+					slog.Warn("LLM response was not valid JSON, retrying", "agent", def.Name, "turn", turn+1, "error", jerr)
+					messages = append(messages, llm.Message{
+						Role: "user",
+						Content: fmt.Sprintf(
+							"Your previous response was not valid JSON. "+
+								"Parse error: %s\n\n"+
+								"Please try again, returning ONLY valid JSON.",
+							jerr,
+						),
+					})
+					if hr != nil {
+						hr.EndTurn()
+					}
+					continue
+				}
+			}
+
 			slog.Info("agent run completed", "agent", def.Name, "turns", turn+1)
 			if rl != nil {
 				rl.Completed(turn + 1)
@@ -259,8 +296,6 @@ func (rt *Runtime) RunWithHistory(ctx context.Context, def *config.Definition, u
 			if hr != nil {
 				hr.EndTurn()
 			}
-			// Return history excluding the system prompt so it can be replayed next turn.
-			// Slice off the leading system message: messages[1:] = history + new user msg + assistant reply.
 			return content, messages[1:], nil
 		}
 

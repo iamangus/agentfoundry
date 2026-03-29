@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/santhosh-tekuri/jsonschema/v5"
 )
 
 // Default base URL — OpenRouter is the default for backward compatibility.
@@ -353,4 +355,31 @@ func StripCodeFences(s string) string {
 		return s[start:]
 	}
 	return s[start : end+1]
+}
+
+// IsValidJSON checks whether s is valid JSON. It returns nil if so, or an
+// error describing the parse failure.
+func IsValidJSON(s string) error {
+	var v any
+	return json.Unmarshal([]byte(s), &v)
+}
+
+// ValidateAgainstSchema validates content (a JSON string) against the given
+// JSON Schema. It returns nil on success or a descriptive error on failure.
+func ValidateAgainstSchema(content string, schema json.RawMessage) error {
+	compiler := jsonschema.NewCompiler()
+	schemaID := "schema.json"
+	if err := compiler.AddResource(schemaID, strings.NewReader(string(schema))); err != nil {
+		return fmt.Errorf("compile schema: %w", err)
+	}
+	sch := compiler.MustCompile(schemaID)
+
+	var v any
+	if err := json.Unmarshal([]byte(content), &v); err != nil {
+		return fmt.Errorf("invalid JSON: %w", err)
+	}
+	if err := sch.Validate(v); err != nil {
+		return err
+	}
+	return nil
 }
