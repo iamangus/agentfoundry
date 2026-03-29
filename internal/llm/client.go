@@ -151,6 +151,26 @@ type Usage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
+func isEmptyResponse(resp *ChatResponse) bool {
+	if len(resp.Choices) == 0 {
+		return true
+	}
+	for _, c := range resp.Choices {
+		if c.FinishReason == "length" {
+			return true
+		}
+		if len(c.Message.ToolCalls) > 0 {
+			return false
+		}
+		if c.Message.Content != nil {
+			if s, ok := c.Message.Content.(string); ok && s != "" {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func isRetryableHTTP(statusCode int) bool {
 	switch statusCode {
 	case http.StatusTooManyRequests,
@@ -235,6 +255,10 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, req *ChatRequest) (*C
 			var chatResp ChatResponse
 			if err := json.Unmarshal(respBody, &chatResp); err != nil {
 				return nil, fmt.Errorf("parse response: %w", err)
+			}
+			if isEmptyResponse(&chatResp) {
+				lastErr = fmt.Errorf("LLM returned empty response (no content, no tool calls, or finish_reason=length)")
+				continue
 			}
 			return &chatResp, nil
 		}
