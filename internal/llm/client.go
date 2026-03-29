@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 )
@@ -150,7 +151,21 @@ type Usage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
+func isRetryableHTTP(statusCode int) bool {
+	switch statusCode {
+	case http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
+
 // ChatCompletion sends a chat completion request to the configured API endpoint.
+// Transient errors (429, 500, 502, 503, 504) and network errors are retried
+// with exponential backoff: 1s, 3s, 7s, then every 10s up to maxRetries.
 func (c *OpenAIClient) ChatCompletion(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
 	if req.Model == "" {
 		req.Model = c.defaultModel
@@ -161,40 +176,74 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, req *ChatRequest) (*C
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+	backoffSchedule := []time.Duration{
+		1 * time.Second,
+		3 * time.Second,
+		7 * time.Second,
+	}
+	const defaultBackoff = 10 * time.Second
+	const maxRetries = 10
+
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			var wait time.Duration
+			if attempt-1 < len(backoffSchedule) {
+				wait = backoffSchedule[attempt-1]
+			} else {
+				wait = defaultBackoff
+			}
+			slog.Warn("LLM request failed, retrying",
+				"attempt", attempt,
+				"wait", wait,
+				"error", lastErr,
+			)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(wait):
+			}
+		}
+
+		httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+
+		httpReq.Header.Set("Content-Type", "application/json")
+		if c.apiKey != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+		}
+		for k, v := range c.headers {
+			httpReq.Header.Set(k, v)
+		}
+
+		resp, err := c.httpClient.Do(httpReq)
+		if err != nil {
+			lastErr = fmt.Errorf("http request: %w", err)
+			continue
+		}
+
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = fmt.Errorf("read response: %w", err)
+			continue
+		}
+
+		if resp.StatusCode == http.StatusOK {
+			var chatResp ChatResponse
+			if err := json.Unmarshal(respBody, &chatResp); err != nil {
+				return nil, fmt.Errorf("parse response: %w", err)
+			}
+			return &chatResp, nil
+		}
+
+		lastErr = fmt.Errorf("LLM API error %d: %s", resp.StatusCode, string(respBody))
+		if !isRetryableHTTP(resp.StatusCode) {
+			return nil, lastErr
+		}
 	}
 
-	httpReq.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-
-	// Set any extra provider-specific headers.
-	for k, v := range c.headers {
-		httpReq.Header.Set(k, v)
-	}
-
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("LLM API error %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var chatResp ChatResponse
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
-	}
-
-	return &chatResp, nil
+	return nil, fmt.Errorf("LLM request failed after %d retries: %w", maxRetries, lastErr)
 }
