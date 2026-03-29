@@ -599,6 +599,9 @@ func (h *Handler) saveAgentForm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	saved := h.store.GetDefinition(name)
+	if saved == nil {
+		saved = def
+	}
 	h.renderPartial(w, "save-agent-response", saveYamlData{
 		Editor: agentEditorData{Def: saved, StructuredOutputJSON: structuredOutputJSON(saved)},
 		Agents: h.store.ListDefinitions(),
@@ -626,11 +629,15 @@ func (h *Handler) createAgentFormNew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.SaveDefinition(def); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		slog.Error("failed to create agent", "name", def.Name, "error", err)
+		http.Error(w, "failed to create", http.StatusInternalServerError)
 		return
 	}
 
 	saved := h.store.GetDefinition(def.Name)
+	if saved == nil {
+		saved = def
+	}
 	h.renderPartial(w, "save-agent-response", saveYamlData{
 		Editor: agentEditorData{Def: saved, StructuredOutputJSON: structuredOutputJSON(saved)},
 		Agents: h.store.ListDefinitions(),
