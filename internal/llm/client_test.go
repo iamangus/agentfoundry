@@ -86,6 +86,31 @@ func TestStripCodeFences(t *testing.T) {
 			input: `Here is the result: {"reason": "he said \"hello\"", "outcome": "ok"}`,
 			want:  `{"reason": "he said \"hello\"", "outcome": "ok"}`,
 		},
+		{
+			name:  "trailing content after JSON object",
+			input: `{"tasks":[]}<system-reminder>you are in build mode</system-reminder>`,
+			want:  `{"tasks":[]}`,
+		},
+		{
+			name:  "trailing content after JSON array",
+			input: `[1,2,3]some trailing garbage`,
+			want:  `[1,2,3]`,
+		},
+		{
+			name:  "trailing content after code fence",
+			input: "```json\n{\"tasks\":[]}\n```\n<system-reminder>noise</system-reminder>",
+			want:  `{"tasks":[]}`,
+		},
+		{
+			name:  "bare JSON with trailing newline and text",
+			input: "{\"tasks\":[]}\n\nI hope this helps!",
+			want:  `{"tasks":[]}`,
+		},
+		{
+			name:  "plain text no JSON",
+			input: "just some text with no json at all",
+			want:  "just some text with no json at all",
+		},
 	}
 
 	for _, tt := range tests {

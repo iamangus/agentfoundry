@@ -298,11 +298,10 @@ func StripCodeFences(s string) string {
 		s = strings.TrimSpace(s)
 	}
 
-	if len(s) > 0 && (s[0] == '{' || s[0] == '[') {
-		return s
-	}
+	return extractBalancedJSON(s)
+}
 
-	// Look for the first '{' or '[' and extract to the matching closing brace.
+func extractBalancedJSON(s string) string {
 	start := -1
 	for i := 0; i < len(s); i++ {
 		if s[i] == '{' || s[i] == '[' {
