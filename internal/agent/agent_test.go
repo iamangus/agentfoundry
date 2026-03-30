@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/angoo/agentfile/internal/config"
@@ -11,16 +12,23 @@ import (
 
 // mockLLMClient captures the last request and returns a canned response.
 type mockLLMClient struct {
-	lastRequest *llm.ChatRequest
+	lastRequest      *llm.ChatRequest
+	schemaValidation bool
+	allRequests      []*llm.ChatRequest
 }
 
 func (m *mockLLMClient) ChatCompletion(_ context.Context, req *llm.ChatRequest) (*llm.ChatResponse, error) {
 	m.lastRequest = req
+	m.allRequests = append(m.allRequests, req)
 	return &llm.ChatResponse{
 		Choices: []llm.Choice{
 			{Index: 0, Message: llm.Message{Role: "assistant", Content: "ok"}},
 		},
 	}, nil
+}
+
+func (m *mockLLMClient) SupportsSchemaValidation() bool {
+	return m.schemaValidation
 }
 
 // mockResolver always returns not found.
@@ -33,7 +41,7 @@ func newTestRuntime(client *mockLLMClient) *Runtime {
 }
 
 func TestRunWithHistory_NoResponseFormat(t *testing.T) {
-	client := &mockLLMClient{}
+	client := &mockLLMClient{schemaValidation: true}
 	rt := newTestRuntime(client)
 	def := &config.Definition{
 		Kind: config.KindAgent, Name: "test", SystemPrompt: "You are a test.",
@@ -45,7 +53,7 @@ func TestRunWithHistory_NoResponseFormat(t *testing.T) {
 }
 
 func TestRunWithHistory_ForceJSON(t *testing.T) {
-	client := &mockLLMClient{}
+	client := &mockLLMClient{schemaValidation: true}
 	rt := newTestRuntime(client)
 	def := &config.Definition{
 		Kind: config.KindAgent, Name: "test", SystemPrompt: "You are a test.",
@@ -64,7 +72,7 @@ func TestRunWithHistory_ForceJSON(t *testing.T) {
 }
 
 func TestRunWithHistory_StructuredOutputFromDefinition(t *testing.T) {
-	client := &mockLLMClient{}
+	client := &mockLLMClient{schemaValidation: true}
 	rt := newTestRuntime(client)
 	schema := json.RawMessage(`{"type":"object","properties":{"score":{"type":"integer"}},"required":["score"]}`)
 	def := &config.Definition{
@@ -91,7 +99,7 @@ func TestRunWithHistory_StructuredOutputFromDefinition(t *testing.T) {
 }
 
 func TestRunWithHistory_OverrideReplacesDefinition(t *testing.T) {
-	client := &mockLLMClient{}
+	client := &mockLLMClient{schemaValidation: true}
 	rt := newTestRuntime(client)
 	defSchema := json.RawMessage(`{"type":"object"}`)
 	overrideSchema := json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"}}}`)
@@ -111,7 +119,7 @@ func TestRunWithHistory_OverrideReplacesDefinition(t *testing.T) {
 }
 
 func TestRunWithHistory_StructuredOutputWinsOverForceJSON(t *testing.T) {
-	client := &mockLLMClient{}
+	client := &mockLLMClient{schemaValidation: true}
 	rt := newTestRuntime(client)
 	schema := json.RawMessage(`{"type":"object"}`)
 	def := &config.Definition{
@@ -130,14 +138,13 @@ func TestRunWithHistory_StructuredOutputWinsOverForceJSON(t *testing.T) {
 }
 
 func TestRunWithHistory_OverrideNilUsesDefinition(t *testing.T) {
-	client := &mockLLMClient{}
+	client := &mockLLMClient{schemaValidation: true}
 	rt := newTestRuntime(client)
 	schema := json.RawMessage(`{"type":"object"}`)
 	def := &config.Definition{
 		Kind: config.KindAgent, Name: "test", SystemPrompt: "You are a test.",
 		StructuredOutput: &config.StructuredOutput{Name: "def_result", Schema: schema},
 	}
-	// nil override → should use definition's StructuredOutput
 	rt.RunWithHistory(context.Background(), def, "hello", nil, nil, nil, nil)
 	rf := client.lastRequest.ResponseFormat
 	if rf == nil || rf.JSONSchema == nil {
@@ -145,5 +152,70 @@ func TestRunWithHistory_OverrideNilUsesDefinition(t *testing.T) {
 	}
 	if rf.JSONSchema.Name != "def_result" {
 		t.Errorf("got JSONSchema.Name=%q, want def_result", rf.JSONSchema.Name)
+	}
+}
+
+func TestRunWithHistory_NoSchemaValidation_UsesJSONObject(t *testing.T) {
+	client := &mockLLMClient{schemaValidation: false}
+	rt := newTestRuntime(client)
+	schema := json.RawMessage(`{"type":"object","properties":{"score":{"type":"integer"}},"required":["score"]}`)
+	def := &config.Definition{
+		Kind: config.KindAgent, Name: "test", SystemPrompt: "You are a test.",
+		StructuredOutput: &config.StructuredOutput{Name: "result", Schema: schema},
+	}
+	rt.RunWithHistory(context.Background(), def, "hello", nil, nil, nil, nil)
+	rf := client.lastRequest.ResponseFormat
+	if rf == nil {
+		t.Fatal("expected ResponseFormat to be set")
+	}
+	if rf.Type != "json_object" {
+		t.Errorf("got type=%q, want json_object (provider doesn't support schema validation)", rf.Type)
+	}
+	if rf.JSONSchema != nil {
+		t.Error("expected JSONSchema to be nil when provider doesn't support schema validation")
+	}
+}
+
+func TestRunWithHistory_NoSchemaValidation_SchemaInSystemPrompt(t *testing.T) {
+	client := &mockLLMClient{schemaValidation: false}
+	rt := newTestRuntime(client)
+	schema := json.RawMessage(`{"type":"object","properties":{"score":{"type":"integer"}}}`)
+	def := &config.Definition{
+		Kind: config.KindAgent, Name: "test", SystemPrompt: "You are a test.",
+		StructuredOutput: &config.StructuredOutput{Name: "result", Schema: schema},
+	}
+	rt.RunWithHistory(context.Background(), def, "hello", nil, nil, nil, nil)
+	if len(client.allRequests) == 0 {
+		t.Fatal("expected at least one request")
+	}
+	sysMsg := client.allRequests[0].Messages[0]
+	if sysMsg.Role != "system" {
+		t.Fatal("first message should be system")
+	}
+	content, _ := sysMsg.Content.(string)
+	if content == "You are a test." {
+		t.Error("system prompt should contain the injected schema, but it was unchanged")
+	}
+	if !strings.Contains(content, `"type":"object"`) && !strings.Contains(content, `"type": "object"`) {
+		t.Errorf("system prompt should contain the schema, got: %s", content)
+	}
+}
+
+func TestRunWithHistory_SchemaValidation_SchemaNotInSystemPrompt(t *testing.T) {
+	client := &mockLLMClient{schemaValidation: true}
+	rt := newTestRuntime(client)
+	schema := json.RawMessage(`{"type":"object","properties":{"score":{"type":"integer"}}}`)
+	def := &config.Definition{
+		Kind: config.KindAgent, Name: "test", SystemPrompt: "You are a test.",
+		StructuredOutput: &config.StructuredOutput{Name: "result", Schema: schema},
+	}
+	rt.RunWithHistory(context.Background(), def, "hello", nil, nil, nil, nil)
+	if len(client.allRequests) == 0 {
+		t.Fatal("expected at least one request")
+	}
+	sysMsg := client.allRequests[0].Messages[0]
+	content, _ := sysMsg.Content.(string)
+	if content != "You are a test." {
+		t.Errorf("system prompt should be unchanged when provider supports schema validation, got: %s", content)
 	}
 }

@@ -55,10 +55,11 @@ func main() {
 
 	// Create LLM client (works with any OpenAI-compatible API)
 	llmClient := llm.NewClient(llm.ClientConfig{
-		BaseURL:      cfg.LLM.BaseURL,
-		APIKey:       cfg.LLM.APIKey,
-		DefaultModel: cfg.LLM.DefaultModel,
-		Headers:      cfg.LLM.Headers,
+		BaseURL:          cfg.LLM.BaseURL,
+		APIKey:           cfg.LLM.APIKey,
+		DefaultModel:     cfg.LLM.DefaultModel,
+		Headers:          cfg.LLM.Headers,
+		SchemaValidation: cfg.LLM.SchemaValidation,
 	})
 
 	// Create agent runtime

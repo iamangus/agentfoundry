@@ -24,12 +24,11 @@ type SystemConfig struct {
 
 // LLMConf configures the OpenAI-compatible LLM provider.
 type LLMConf struct {
-	// BaseURL is the API base URL. The client appends "/chat/completions".
-	// Defaults to "https://openrouter.ai/api/v1" for backward compatibility.
-	BaseURL      string            `yaml:"base_url"`
-	APIKey       string            `yaml:"api_key"`
-	DefaultModel string            `yaml:"default_model"`
-	Headers      map[string]string `yaml:"headers"`
+	BaseURL          string            `yaml:"base_url"`
+	APIKey           string            `yaml:"api_key"`
+	DefaultModel     string            `yaml:"default_model"`
+	Headers          map[string]string `yaml:"headers"`
+	SchemaValidation bool              `yaml:"schema_validation"`
 }
 
 // OpenRouterConf is the legacy configuration format.

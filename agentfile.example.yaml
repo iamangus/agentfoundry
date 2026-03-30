@@ -21,6 +21,11 @@ llm:
     HTTP-Referer: "https://github.com/angoo/agentfile"
     X-Title: "agentfile"
 
+  # Set to true if your provider supports JSON Schema response_format
+  # (e.g. OpenAI, OpenRouter). When false (default), schemas are injected
+  # into the system prompt for providers that only support json_object mode.
+  # schema_validation: true
+
 # Other provider examples:
 #
 # OpenAI directly:

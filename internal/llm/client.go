@@ -20,32 +20,30 @@ const defaultBaseURL = "https://openrouter.ai/api/v1"
 // Client is the interface for LLM providers.
 type Client interface {
 	ChatCompletion(ctx context.Context, req *ChatRequest) (*ChatResponse, error)
+	SupportsSchemaValidation() bool
 }
 
 // ClientConfig holds configuration for an OpenAI-compatible LLM client.
 type ClientConfig struct {
-	// BaseURL is the API base URL (e.g. "https://openrouter.ai/api/v1",
-	// "https://api.openai.com/v1"). The client appends "/chat/completions".
 	BaseURL string
 
-	// APIKey is the bearer token for authentication.
 	APIKey string
 
-	// DefaultModel is used when a request doesn't specify a model.
 	DefaultModel string
 
-	// Headers are extra HTTP headers sent with every request.
-	// Useful for provider-specific headers like OpenRouter's HTTP-Referer / X-Title.
 	Headers map[string]string
+
+	SchemaValidation bool
 }
 
 // OpenAIClient implements Client for any OpenAI-compatible API.
 type OpenAIClient struct {
-	baseURL      string
-	apiKey       string
-	defaultModel string
-	headers      map[string]string
-	httpClient   *http.Client
+	baseURL          string
+	apiKey           string
+	defaultModel     string
+	headers          map[string]string
+	httpClient       *http.Client
+	schemaValidation bool
 }
 
 // NewClient creates a new OpenAI-compatible LLM client.
@@ -55,12 +53,17 @@ func NewClient(cfg ClientConfig) *OpenAIClient {
 		baseURL = defaultBaseURL
 	}
 	return &OpenAIClient{
-		baseURL:      baseURL,
-		apiKey:       cfg.APIKey,
-		defaultModel: cfg.DefaultModel,
-		headers:      cfg.Headers,
-		httpClient:   &http.Client{Timeout: 120 * time.Second},
+		baseURL:          baseURL,
+		apiKey:           cfg.APIKey,
+		defaultModel:     cfg.DefaultModel,
+		headers:          cfg.Headers,
+		httpClient:       &http.Client{Timeout: 120 * time.Second},
+		schemaValidation: cfg.SchemaValidation,
 	}
+}
+
+func (c *OpenAIClient) SupportsSchemaValidation() bool {
+	return c.schemaValidation
 }
 
 // NewOpenRouterClient creates a client pre-configured for OpenRouter.

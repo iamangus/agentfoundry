@@ -133,23 +133,29 @@ func (rt *Runtime) RunWithHistory(ctx context.Context, def *config.Definition, u
 		}
 	}
 
-	// Initialize conversation: system prompt + prior history + new user message
-	messages := make([]llm.Message, 0, 2+len(history))
-	messages = append(messages, llm.Message{Role: "system", Content: def.SystemPrompt})
-	messages = append(messages, history...)
-	messages = append(messages, llm.Message{Role: "user", Content: userInput})
-
 	maxTurns := def.MaxTurns
 	if maxTurns == 0 {
 		maxTurns = 10
 	}
 
-	// Resolve structured output once before the turn loop.
-	// structured_output override > definition's structured_output > force_json
 	so := structuredOutput
 	if so == nil {
 		so = def.StructuredOutput
 	}
+
+	systemPrompt := def.SystemPrompt
+	if so != nil && !rt.llmClient.SupportsSchemaValidation() {
+		systemPrompt += fmt.Sprintf(
+			"\n\nYou must respond with ONLY valid JSON matching this schema:\n%s",
+			string(so.Schema),
+		)
+	}
+
+	// Initialize conversation: system prompt + prior history + new user message
+	messages := make([]llm.Message, 0, 2+len(history))
+	messages = append(messages, llm.Message{Role: "system", Content: systemPrompt})
+	messages = append(messages, history...)
+	messages = append(messages, llm.Message{Role: "user", Content: userInput})
 
 	for turn := 0; turn < maxTurns; turn++ {
 		slog.Debug("agent turn", "agent", def.Name, "turn", turn)
@@ -167,7 +173,7 @@ func (rt *Runtime) RunWithHistory(ctx context.Context, def *config.Definition, u
 		if len(toolDefs) > 0 {
 			req.Tools = toolDefs
 		}
-		if so != nil {
+		if so != nil && rt.llmClient.SupportsSchemaValidation() {
 			req.ResponseFormat = &llm.ResponseFormat{
 				Type: "json_schema",
 				JSONSchema: &llm.JSONSchema{
@@ -176,6 +182,8 @@ func (rt *Runtime) RunWithHistory(ctx context.Context, def *config.Definition, u
 					Strict: so.Strict,
 				},
 			}
+		} else if so != nil {
+			req.ResponseFormat = &llm.ResponseFormat{Type: "json_object"}
 		} else if def.ForceJSON {
 			req.ResponseFormat = &llm.ResponseFormat{Type: "json_object"}
 		}
@@ -256,15 +264,24 @@ func (rt *Runtime) RunWithHistory(ctx context.Context, def *config.Definition, u
 			if so != nil {
 				if verr := llm.ValidateAgainstSchema(content, so.Schema); verr != nil {
 					slog.Warn("LLM response failed schema validation, retrying", "agent", def.Name, "turn", turn+1, "error", verr)
-					messages = append(messages, llm.Message{
-						Role: "user",
-						Content: fmt.Sprintf(
+					var retryMsg string
+					if !rt.llmClient.SupportsSchemaValidation() {
+						retryMsg = fmt.Sprintf(
+							"Your previous response did not conform to the required JSON schema.\n\n"+
+								"Validation error: %s\n\n"+
+								"The JSON schema you must follow:\n%s\n\n"+
+								"Please try again, returning ONLY valid JSON that matches this schema exactly.",
+							verr, string(so.Schema),
+						)
+					} else {
+						retryMsg = fmt.Sprintf(
 							"Your previous response did not conform to the required JSON schema. "+
 								"Validation error: %s\n\n"+
 								"Please try again, returning ONLY valid JSON that matches the schema exactly.",
 							verr,
-						),
-					})
+						)
+					}
+					messages = append(messages, llm.Message{Role: "user", Content: retryMsg})
 					if hr != nil {
 						hr.EndTurn()
 					}
