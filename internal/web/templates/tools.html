@@ -14,469 +14,252 @@
     :root {
       --uk-primary: oklch(59.1% 0.249 292.7);
       --uk-primary-f: oklch(100% 0 0);
-      --uk-focus: oklch(66.6% 0.247 292.7);
+      --uk-focus: oklch(66.6% 0.247 292.0);
+    }
     .dark {
       --bg-base:    #0f0f11;
-      --text-base:  #e4e8;
- --text-muted: #71717a;
+      --bg-sidebar: #0a0a0d;
+      --bg-card:    #18181c;
+      --border:     #27272a;
+      --text-base:  #e4e4e7;
+      --text-muted: #71717a;
       --purple:     oklch(59.1% 0.249 292.7);
-      --purple-dim: oklch(59.1% 0.249 302.7 / 0.15);
+      --purple-dim: oklch(59.1% 0.249 292.7 / 0.15);
       --purple-solid: #7c3aed;
     }
     *, *::before, *::after { box-sizing: border-box; }
-    html, body { margin: 0; height: 100%; font-family: 'Inter', system-ui, -apple-system, sans-serif; background: var(--bg-base); color: var(--text-base);
- }
-    .page-body { display: flex; overflow-y: auto; height: calc(100vh - 52px); }
+    html, body { margin: 0; height: 100%; font-family: 'Inter', system-ui, -apple-system, sans-serif; background: var(--bg-base); color: var(--text-base); }
+
+    .page-body { flex: 1; overflow-y: auto; }
+
     .tool-card {
-      background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
-      transition: background 0.15s, border-color 00.15s;
-    .tool-card:hover { background: var(--bg-card); }
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .tool-card:hover { background: rgba(255,255,255,0.03); }
     .tool-card:has(input[type="checkbox"]:checked) {
-      background: var(--purple-dim); border-color: oklch(59.1% 0.249 292.7);
-    .tool-card:has(input[type="checkbox"]:checked) {
-      background: var(--purple);
+      background: var(--purple-dim);
+      border-color: oklch(59.1% 0.249 292.7 / 0.5);
     }
     .tool-name {
-      font-size: 13px; font-family: ui-monospace, SFFMono-Regular, Menlo, monospace; font-size: 0.85rem; color: var(--text-muted);
+      font-size: 13px;
+      font-weight: 600;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: var(--text-base);
     }
-    .tool-desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
-    .tool-qualified { font-size: 0.82rem; color: oklch(70% 0.2 15%); font-size: 0.82rem; font-weight: 600; letter-spacing: 0.02em; margin-bottom: 4px;    }
+    .tool-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+    .tool-checkbox {
+      width: 15px; height: 15px;
+      flex-shrink: 0; margin-top: 1px;
+      accent-color: var(--purple-solid);
+      cursor: pointer;
+    }
+    .server-badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 11px; font-weight: 500;
+      color: oklch(70% 0.2 292.0);
+      background: var(--purple-dim);
+      border: 1px solid oklch(59.1% 0.249 292.7 / 0.3);
+      border-radius: 6px;
+      padding: 2px 8px;
+      margin-bottom: 6px;
+    }
     .yaml-output {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6; resize: vertical;
- border-radius: 8px; padding: 10px 12px; width: 100%; box-sizing: border-box;
- }
-    .yaml-output { width: 100%; box-sizing: border-box; }
-    .yaml-output {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6; resize: vertical; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; width: 100%; box-sizing: border-box; }
-    .yaml-output pre { overflow-y: auto; }
+      width: 100%;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: var(--text-base);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      resize: vertical;
+      outline: none;
+    }
+    .btn-default {
+      padding: 5px 12px; border-radius: 8px; font-family: inherit; font-size: 12px;
+      font-weight: 500; cursor: pointer; border: 1px solid var(--border);
+      background: var(--bg-card); color: var(--text-muted);
+      transition: background 0.12s, color 0.12s;
+    }
+    .btn-default:hover { background: var(--purple-dim); color: var(--text-base); }
+    .btn-primary {
+      padding: 5px 12px; border-radius: 8px; font-family: inherit; font-size: 12px;
+      font-weight: 600; cursor: pointer; border: none;
+      background: var(--purple-solid); color: #fff;
+      transition: opacity 0.15s;
+    }
+    .btn-primary:hover { opacity: 0.88; }
   </style>
+  <script>
+    function copyToolYaml(btn) {
+      var ta = document.getElementById('tool-yaml-output');
+      if (!ta) return;
+      navigator.clipboard.writeText(ta.value).then(function() {
+        btn.textContent = 'Copied!';
+        setTimeout(function() { btn.textContent = 'Copy'; }, 1500);
+      }).catch(function() {
+        ta.select();
+        document.execCommand('copy');
+        btn.textContent = 'Copied!';
+        setTimeout(function() { btn.textContent = 'Copy'; }, 1500);
+      });
+    }
+    function clearToolSelection() {
+      document.querySelectorAll('#tool-select-form input[type=checkbox]').forEach(function(c) { c.checked = false; });
+      document.getElementById('tool-generate-result').innerHTML = '';
+    }
+  </script>
 </head>
-<body>
+<body style="display:flex; flex-direction:column; min-height:100vh;">
+
 {{template "navbar" .}}
 
-<div class="page-body">
-  <form id="tool-select-form" hx-post="/tools/generate" hx-target="#tool-generate-result" hx-swap="innerHTML">
-    <div class="flex items-center justify-between mt-6 mb-4" style="display:flex; align-items: center; gap: 2;">
-    <div class="flex-1 items-center justify-center">
-">
-          <button type="submit" class="btn-clear" onclick="clearToolSelection()">">Clear</button>
-          <button type="submit" class="btn-primary" style="border-radius: 8px; padding: 4px 12px; font-size: 12px; font-weight: 600;">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M14.7 6.3a1 9.5 7l3.56 0 0 4 4H2>
-  <path d="M6 12 3a5V12. Generate Tool List</button>
-        </div>
-      </div>
-    </div>
-  {{end}}
-</div>
-
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-
-{{end}}
-</div>
-</form>
-</div>
-</form>
-</div>
-</div>
-</main>
-</div>
-</div>
-</form>
-</div>
-</form>
-</div>
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-</div>
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-
-{{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form "YAML snippet" hidden field" value="{{.YAML}}
- readonly spellcheck="false"
- spellcheck="false"
- style="background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; width: 100%; box-sizing: border-box; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6; color: var(--text-muted); }
-.yaml-output { width: 100%; box-sizing: border-box; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6; }
-</style>
-</head>
-<body>
-{{template "navbar" .}}
-
-<div class="page-body">
-  <form id="tool-select-form" hx-post="/tools/generate" hx-target="#tool-generate-result" hx-swap="innerHTML">
-  <div class="flex items-center justify-between mt-6 mb-4" style="display:flex; align-items: center; gap: 2">
-    <div class="flex-1 items-center justify-center">
- flex-direction: row;">
-          <button type="submit" class="btn-clear" onclick="clearToolSelection()">">Clear</button>
-          <button type="submit" class="btn-primary" style="border-radius: 8px; padding: 4px 12px; font-size: 12px; font-weight: 600">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M14.7 6.3a1 9.5 7l3.8hr)</svg>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-
-{{end}}
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form>
-</div>
-</form>
-  {{end}}
-</div>
-</form"POST /agents/{{.Name}}" hx-target="#agent-editor" hx-swap="innerHTML">
-    </div>
-    <div class="flex items-center gap-2">
-      <a hx-get="/agents/{{.Name}}/edit" hx-target="#agent-editor" hx-swap="innerHTML">
-          <span class="agent-name">{{.Name}}</span>
-          <span class="agent-desc">{{.Description}}</span>
-        </a>
-      <div class="del-btn flex flex-col gap-1">
-        <button hx-post="/agents/{{.Name}}/clone" hx-target="#agent-editor" hx-swap="innerHTML"          <span class="text-xs" style="color: oklch(50% 0.2 25%) Clone</button>
-        <button hx-delete="/agents/{{.Name}}" hx-target="#agent-list" hx-swap="innerHTML" hx-confirm="Delete agent {{.Name}}?">Del</button>
-      </div>
-    </div>
-    {{else}}
-    <div style="display:flex; flex-direction: column; align-items: center; max-width-xs">
- max-w-xs">
-    <p class="text-xs" style="color: var(--text-muted);">Use the <strong>New Agent</strong> form below.</p>
-      </div>
-    </div>
-  </div>
-</div>
-</div>
-</div>
-
-{{define "agent-editor-empty"}}
-<div style="display:flex; flex-direction:column; height: 100%;">
-  <div class="empty-state">
-    <div class="empty-icon" style="width: 56px; height: 56px; border-radius: 14px; background: var(--purple-dim); border: 1px solid var(--purple); display: flex; align-items: center; justify-content: center;">
-  <div class="empty-title">Agent Temporal</div>
-    <p class="empty-sub" style="font-size: 0.82rem; font-size: 0.85rem; font-weight: 600; color: var(--text-muted);">Pick an agent from the sidebar, or create a new one.</p>
-  </div>
-</div>
-
-</div>
-
-</div>
-</form>
-
-{{define "agent-editor-new"}}
-<div style="display:flex; flex-direction: column; height: 100%;">
-  <div class="flex items-center justify-between">
- flex-direction: row">
-  <div class="flex items-center gap-2">
-    <div class="flex items-center gap-2">
-      <a href="/agents/new" hx-get="/agents/new" hx-target="#agent-editor" hx-swap="innerHTML">
-          <span class="text-sm font-semibold">New Agent</span>
-      </div>
-      <div class="flex items-center gap-3">
-      <div class="flex items-center gap-3">
-        <button type="submit" form="agent-form-new" hx-post="/agents/form" hx-target="#agent-editor" hx-swap="innerHTML" class="btn-primary" style="border-radius: 8px; padding: 4px 14px; font-size: 12px; font-weight: 600;">            </span>
-      </div>
-    </div>
-    <div class="flex flex-col gap-4">
+<div class="page-body" style="padding: 32px 24px;">
+  <div style="max-width: 960px; margin: 0 auto;">
+    <div style="display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:24px;">
       <div>
-        <label class="field-label"> style="display:block;margin-bottom:4px;">Name <span class="text-red-500">*</span></label>
-        <input type="text" name="name" class="field-input" value="{{.Name}}" placeholder="my-agent" required />
+        <h1 style="font-size:1rem; font-weight:600; margin:0 0 4px;">Registered Tools</h1>
+        <p style="font-size:0.8rem; color:var(--text-muted); margin:0;">
+          MCP tools discovered from connected servers. Select tools to generate a config snippet.
+        </p>
       </div>
-      <div>
-        <label class="field-label"> style="display:block;margin-bottom:4px;">Description</label>
-        <input type="text" name="description" class="field-input" placeholder="Short description of what this agent does" />
+      <button
+        class="btn-default"
+        hx-get="/tools/list"
+        hx-target="#tool-list"
+        hx-swap="innerHTML"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline; margin-right:4px; vertical-align:-1px;">
+          <polyline points="1 4 1 10 7 10"></polyline>
+          <path d="M3.51 15a9 9 0 1 0 .49-3.09"></path>
+        </svg>
+        Refresh
+      </button>
+    </div>
+
+    <form id="tool-select-form" hx-post="/tools/generate" hx-target="#tool-generate-result" hx-swap="innerHTML">
+      <div id="tool-list">
+        {{template "tool-list" .}}
       </div>
-      <div class="flex flex-col">
-        <label class="field-label" style="display:block;margin-bottom:4px;">Model</label>
-        <input type="text" name="model" class="field-input" placeholder="system default" value="{{.Model}}" />
-      </div>
-      <div class="flex flex-col">
-        <label class="field-label" style="display:block;margin-bottom:4px;">System Prompt</label>
-        <textarea name="system_prompt" class="field-textarea" style="font-family:ui-monospace,monospace;font-size:13px;min-height:240px;resize:vertical;border-radius:6px;line-height:1.6;" spellcheck="false" placeholder="You are a helpful assistant...">
-        ></textarea>
-      </div>
-      <div class="flex flex-col gap-4">
-        <label class="field-label" style="display:block;margin-bottom:4px;">
-          Tools <span class="normal-case font-normal">(one per line, — e.g. <code style="font-family:ui-monospace,monospace">background: var(--bg-card); border-radius: 6px; padding: 0 2px;">srvd.web_search
- style>)</span>
-        </label>
-        <textarea name="tools" class="field-textarea" style="font-family:ui-monospace,monospace;font-size:12px;min-height:72px;resize:vertical;border-radius:6px;" spellcheck="false" placeholder="srvd.web_search&#10;srvd.web_url_read"
-        ></textarea>
-      </div>
-      <div style="display:flex; gap:16px;">
-        <div class="flex-1">
-          <label class="field-label" style="display:block;margin-bottom:4px;">Max Turns</label>
-          <input type="number" name="max_turns" value="{{if .Def.MaxTurns}}{{.Def.MaxTurns}}{{end}}" class="field-input" placeholder="10" min="0" />
-        </div>
-        <div class="flex-1">
-          <label class="field-label" style="display:block;margin-bottom:4px;">Max Concurrent Tools</label>
-          <input type="number" name="max_concurrent_tools" value="{{if .Def.MaxConcurrentTools}}{{.Def.MaxConcurrentTools}}{{end}} class="field-input" placeholder="unlimited" min="0" />
-        </div>
-      </div>
-      <div style="border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px;">
-        <label style="display:flex; align-items: center; gap: 8px; cursor: pointer; user-select: none">
-          <input type="checkbox" name="force_json" value="true" style="width:15px; height:15px;" />
-          <span class="text-sm font-medium">Force JSON output <span class="text-xs" style="font-weight: normal">(json_object mode, no schema)</span></span>
-        </label>
-      </div>
-      <input type="hidden" name="structured_output_enabled" id="so-enabled-{{.Def.Name}}" value="{{if .StructuredOutputJSON}}true{{else}}false{{end}}" />
-      <input type="hidden" name="structured_output_json" id="so-json-{{.Def.Name}}" value="{{.StructuredOutputJSON}}" />
-      <div style="border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px;">
-        <label style="display:flex; align-items: center; gap: 8px; cursor: pointer; user-select: none">
-          <input type="checkbox" id="so-toggle-{{.Def.Name}}" {{if .StructuredOutputJSON}}checked{{end}} onchange="toggleStructuredOutput('{{.Def.Name}}')" style="width:15px; height:15px;" />
-          <span class="text-sm font-medium">Enable structured output (JSON Schema)</span>
-        </label>
-        <div id="so-panel-{{.Def.Name}}" style="margin-top:10px;{{if eq .StructuredOutputJSON ""}}display:none;{{end}}">
-          <p class="field-hint" style="margin-bottom:6px;">
-            JSON object with <code>name</code>, <code>schema</code>, and optionally <code>strict</code>.
- Same object passed as <code>response_schema</code> in the run API.
-          </p>
-          <textarea id="so-textarea-{{.Def.Name}}" class="field-textarea so style="font-family:ui-monospace,monospace;font-size:12px;min-height:140px; border-radius: 6px;" spellcheck="false" placeholder='{"name": "result", "strict": true, "schema": {"type": "object", "properties": {}, "required": [], "additionalProperties": false}}'" oninput="syncStructuredOutput('{{.Def.Name}}')">{{.StructuredOutputJSON}}</textarea>
+
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-top:24px; margin-bottom:16px;">
+        <p style="font-size:0.8rem; color:var(--text-muted); margin:0;">
+          Check the tools you want, then click <strong>Generate Tool List</strong>.
+        </p>
+        <div style="display:flex; gap:8px;">
+          <button type="button" class="btn-default" onclick="clearToolSelection()">Clear</button>
+          <button type="submit" class="btn-primary">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline; margin-right:4px; vertical-align:-1px;">
+              <polyline points="16 18 22 12 16 6"></polyline>
+              <polyline points="8 6 2 12 8 18"></polyline>
+            </svg>
+            Generate Tool List
+          </button>
         </div>
       </div>
     </form>
+
+    <div id="tool-generate-result"></div>
   </div>
 </div>
-</div>
 
-<script>
-function toggleStructuredOutput(name) {
-  var checkbox = document.getElementById('so-toggle-' + name);
-  var panel = document.getElementById('so-panel-' + name);
-  var enabledInput = document.getElementById('so-enabled-' + name);
-  panel.style.display = checkbox.checked ? 'block' : 'none';
-  enabledInput.value = checkbox.checked ? 'true' : 'false';
-}
-function syncStructuredOutput(name) {
-  var textarea = document.getElementById('so-textarea-' + name);
-  var jsonInput = document.getElementById('so-json-' + name);
-  jsonInput.value = textarea.value;
-}
-}
-</script>
+</body>
+</html>
 {{end}}
 
-{{define "save-agent-response"}}
-<div id="agent-list" hx-swap-oob="true">
-  {{template "agent-list-items" (dict "Agents" .Agents)}}
+{{define "tool-list"}}
+{{if .Servers}}
+  {{range .Servers}}
+  <div style="margin-bottom:32px;">
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px;">
+      <span class="server-badge">
+        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+          <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+          <line x1="6" y1="6" x2="6.01" y2="6"></line>
+          <line x1="6" y1="18" x2="6.01" y2="18"></line>
+        </svg>
+        {{.Name}}
+      </span>
+      <span style="font-size:0.75rem; color:var(--text-muted);">{{len .Tools}} tool{{if ne (len .Tools) 1}}s{{end}}</span>
+    </div>
+    <div style="display:grid; gap:8px; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr));">
+      {{range .Tools}}
+      <label class="tool-card" for="tool-chk-{{.QualifiedName}}">
+        <div style="display:flex; align-items:flex-start; gap:8px;">
+          <input
+            type="checkbox"
+            id="tool-chk-{{.QualifiedName}}"
+            name="tool"
+            value="{{.QualifiedName}}"
+            class="tool-checkbox"
+          />
+          <div style="display:flex; flex-direction:column; gap:4px; min-width:0;">
+            <span class="tool-name">{{.Name}}</span>
+            {{if .Description}}
+            <span class="tool-desc">{{.Description}}</span>
+            {{else}}
+            <span class="tool-desc" style="font-style:italic; opacity:0.5;">No description</span>
+            {{end}}
+            <span style="font-size:11px; color:var(--text-muted); font-family:ui-monospace,monospace; margin-top:2px;">{{.QualifiedName}}</span>
+          </div>
+        </div>
+      </label>
+      {{end}}
+    </div>
+  </div>
+  {{end}}
+{{else}}
+<div style="display:flex; flex-direction:column; align-items:center; justify-content:center; padding:80px 0; text-align:center;">
+  <div style="width:56px; height:56px; border-radius:14px; background:var(--purple-dim); border:1px solid oklch(59.1% 0.249 292.7 / 0.4); display:flex; align-items:center; justify-content:center; margin-bottom:24px;">
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="oklch(59.1% 0.249 292.7)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
+    </svg>
+  </div>
+  <p style="font-size:0.9rem; font-weight:600; color:var(--text-base); margin:0 0 6px;">No tools registered</p>
+  <p style="font-size:0.8rem; color:var(--text-muted); max-width:280px; margin:0;">
+    Connect MCP servers in your <code style="font-family:ui-monospace,monospace; background:var(--bg-card); border-radius:4px; padding:0 4px;">agentfile.yaml</code> to discover tools.
+  </p>
 </div>
-{{template "agent-editor" .Editor}}
+{{end}}
+{{end}}
+
+{{define "tool-generate-result"}}
+{{if eq .Selected 0}}
+<div style="display:flex; flex-direction:column; align-items:center; justify-content:center; padding:40px; text-align:center; border:1px dashed var(--border); border-radius:10px;">
+  <p style="font-size:0.85rem; font-weight:600; color:var(--text-base); margin:0 0 4px;">No tools selected</p>
+  <p style="font-size:0.8rem; color:var(--text-muted); margin:0;">Check at least one tool above and click <strong>Generate Tool List</strong>.</p>
+</div>
+{{else}}
+<div style="border:1px solid var(--border); border-radius:10px; overflow:hidden;">
+  <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 16px; border-bottom:1px solid var(--border); background:var(--bg-sidebar);">
+    <span style="font-size:0.8rem; font-weight:500;">
+      Generated tool list — {{.Selected}} tool{{if ne .Selected 1}}s{{end}} selected
+    </span>
+    <button type="button" class="btn-default" style="padding:3px 10px; font-size:11px;" onclick="copyToolYaml(this)">Copy</button>
+  </div>
+  <div style="padding:12px;">
+    <textarea
+      id="tool-yaml-output"
+      class="yaml-output"
+      rows="{{.Lines}}"
+      readonly
+      spellcheck="false"
+    >{{.YAML}}</textarea>
+  </div>
+</div>
+{{end}}
 {{end}}
