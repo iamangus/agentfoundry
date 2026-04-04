@@ -4,7 +4,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/angoo/agentfile/internal/mcpclient"
+	"github.com/angoo/agentfoundry/internal/mcpclient"
 	"gopkg.in/yaml.v3"
 )
 

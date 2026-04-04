@@ -6,7 +6,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/angoo/agentfile/internal/config"
+	"github.com/angoo/agentfoundry/internal/config"
 )
 
 func TestStructuredOutput_YAMLRoundTrip(t *testing.T) {

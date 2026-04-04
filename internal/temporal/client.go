@@ -6,15 +6,15 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/angoo/agentfile/internal/config"
-	"github.com/angoo/agentfile/internal/llm"
-	"github.com/angoo/agentfile/internal/mcpclient"
+	"github.com/angoo/agentfoundry/internal/config"
+	"github.com/angoo/agentfoundry/internal/llm"
+	"github.com/angoo/agentfoundry/internal/mcpclient"
 
 	"go.temporal.io/sdk/client"
 )
 
 const (
-	TaskQueue    = "agent-temporal-worker"
+	TaskQueue    = "agentfoundry-worker"
 	WorkflowType = "RunAgentWorkflow"
 )
 

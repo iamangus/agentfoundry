@@ -17,10 +17,10 @@ jobs:
       id: vars
       run: echo ::set-output name=tag::$(echo $(date +%s))
     - name: Build the tagged Docker image
-      run: docker build . --file Dockerfile --tag docker.pkg.github.com/iamangus/agentfile/agentfile:latest
+      run: docker build . --file Dockerfile --tag docker.pkg.github.com/iamangus/agentfoundry/agentfile:latest
     - name: Push the latest Docker image
-      run: docker push docker.pkg.github.com/iamangus/agentfile/agentfile:latest
+      run: docker push docker.pkg.github.com/iamangus/agentfoundry/agentfile:latest
     - name: retag and push
-      run: docker tag docker.pkg.github.com/iamangus/agentfile/agentfile:latest docker.pkg.github.com/iamangus/agentfile/agentfile:${{steps.vars.outputs.tag}}
+      run: docker tag docker.pkg.github.com/iamangus/agentfoundry/agentfile:latest docker.pkg.github.com/iamangus/agentfoundry/agentfile:${{steps.vars.outputs.tag}}
     - name: Push the tagged Docker image
-      run: docker push docker.pkg.github.com/iamangus/agentfile/agentfile:${{steps.vars.outputs.tag}}
+      run: docker push docker.pkg.github.com/iamangus/agentfoundry/agentfile:${{steps.vars.outputs.tag}}

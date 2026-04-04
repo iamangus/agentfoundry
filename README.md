@@ -1,4 +1,4 @@
-# agentfile
+# agentfoundry
 
 A system for defining and running AI agents via YAML configuration. Agents are backed by any OpenAI-compatible LLM API (OpenRouter, OpenAI, Ollama, Together AI, Azure OpenAI, etc.) and have access to tools discovered from external MCP servers. Each agent is exposed as its own MCP server, so agents can be composed — one agent can call another as a tool.
 
@@ -22,39 +22,35 @@ A system for defining and running AI agents via YAML configuration. Agents are b
 ### Build and Run
 
 ```bash
-go build -o agentfile ./cmd/agentfile/
+go build -o agentfoundry ./cmd/agentfoundry/
 export OPENROUTER_API_KEY="sk-or-..."   # or any OpenAI-compatible API key
-./agentfile
+./agentfoundry
 ```
 
 ### Docker
 
 ```bash
-docker build -t agentfile .
+docker build -t agentfoundry .
 docker run -p 3000:3000 \
   -e OPENROUTER_API_KEY="sk-or-..." \
   -v $(pwd)/data:/data \
-  agentfile
+  agentfoundry
 ```
 
-The container stores all persistent data under `/data` (definitions and config). Mount a volume or bind-mount there to persist agent definitions and provide your own `agentfile.yaml`. The default definitions are baked into the image at `/data/definitions/`.
+The container stores all persistent data under `/data` (definitions and config). Mount a volume or bind-mount there to persist agent definitions and provide your own `agentfoundry.yaml`. The default definitions are baked into the image at `/data/definitions/`.
 
 ## Configuration
 
-### agentfile.yaml
+### agentfoundry.yaml
 
 ```yaml
 listen: ":3000"
 definitions_dir: "./definitions"
 
-# Works with any OpenAI-compatible API
-llm:
-  base_url: "https://openrouter.ai/api/v1"   # or https://api.openai.com/v1, etc.
-  api_key: "${OPENROUTER_API_KEY}"
-  default_model: "openai/gpt-4o"
-  headers:
-    HTTP-Referer: "https://github.com/angoo/agentfile"
-    X-Title: "agentfile"
+temporal:
+  host_port: "localhost:7233"
+  namespace: "default"
+  api_key: "${TEMPORAL_API_KEY}"
 
 mcp_servers:
   - name: "srvd"
@@ -65,6 +61,8 @@ mcp_servers:
     url: "http://localhost:4000/sse"
     transport: "sse"
 ```
+
+All auth configuration is via environment variables (see [Authentication & Authorization](#authentication--authorization)).
 
 ### Agent Definition
 
@@ -85,17 +83,45 @@ tools:
 max_turns: 15
 ```
 
+Agents can optionally include scope and team fields for authorization:
+
+```yaml
+kind: agent
+name: team-helper
+scope: team            # "user" (default), "team", or "global"
+team: engineering     # required when scope is "team"
+```
+
 ## API
 
 ### Agents
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/v1/agents` | List all agents |
-| `GET` | `/api/v1/agents/{name}` | Get agent definition |
-| `POST` | `/api/v1/agents` | Create agent (persisted to YAML) |
-| `DELETE` | `/api/v1/agents/{name}` | Delete agent |
+| `GET` | `/api/v1/agents` | List agents visible to the authenticated user |
+| `GET` | `/api/v1/agents/{name}` | Get agent definition (scoped by visibility) |
+| `POST` | `/api/v1/agents` | Create agent (scope: `user` by default, `team`/`global` require roles) |
+| `PUT` | `/api/v1/agents/{name}` | Update agent (permission-checked) |
+| `DELETE` | `/api/v1/agents/{name}` | Delete agent (permission-checked) |
 | `POST` | `/api/v1/agents/{name}/run` | Run an agent |
+
+### Chat Sessions
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/v1/chat/sessions` | Create a chat session (owner-scoped) |
+| `GET` | `/api/v1/chat/sessions` | List current user's sessions |
+| `GET` | `/api/v1/chat/sessions/{id}` | Get session details |
+| `POST` | `/api/v1/chat/sessions/{id}/messages` | Send a message (owner-restricted, returns `run_id`) |
+| `GET` | `/api/v1/chat/runs/{id}/events` | SSE stream for run events (owner-restricted) |
+
+### API Keys
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/v1/api-keys` | Create a personal API key |
+| `GET` | `/api/v1/api-keys` | List your API keys |
+| `DELETE` | `/api/v1/api-keys/{id}` | Revoke an API key |
 
 ### Tools & Status
 
@@ -154,21 +180,204 @@ http://localhost:3000/servers/researcher
 
 The client will see only the tools that agent has access to.
 
+## Authentication & Authorization
+
+Auth is **disabled by default**. Set `AUTH_ISSUER` to enable it. When enabled, all endpoints except `/health` and `/servers/` require a valid `Authorization: Bearer <token>` header.
+
+### Authentication Methods
+
+| Method | Token format | Description |
+|--------|-------------|-------------|
+| **OIDC JWT** | `Bearer eyJ...` | Standard OpenID Connect access token from your IdP |
+| **Personal API Key** | `Bearer afk_...` | SHA-256 hashed key stored in Postgres, resolves to owner's groups/roles at request time |
+
+### Environment Variables
+
+#### Required (to enable auth)
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `AUTH_ISSUER` | OIDC issuer URL | `https://keycloak.example.com/realms/opendev` |
+
+#### OIDC Token Validation
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AUTH_AUDIENCE` | *(empty, skips client ID check)* | Expected `aud` claim in the token |
+| `AUTH_ROLES_CLAIM` | `realm_access.roles` | Dot-separated path to the roles array in JWT claims |
+| `AUTH_GROUPS_CLAIM` | `groups` | Dot-separated path to the groups array in JWT claims |
+
+#### Access Control
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AUTH_ACCESS_ROLES` | `opendev-user` | Comma-separated realm roles that grant API access |
+| `AUTH_ADMIN_ROLES` | `opendev-admin` | Comma-separated realm roles for global admin (full read/write/delete) |
+| `AUTH_TEAM_ADMIN_ROLE` | `team-admin` | Realm role for team admins (can edit/delete any team agent) |
+
+#### Keycloak Admin API (for API key group resolution)
+
+| Variable | Description |
+|----------|-------------|
+| `KEYCLOAK_URL` | Base Keycloak URL (e.g. `https://keycloak.example.com`) |
+| `KEYCLOAK_REALM` | Realm name (e.g. `opendev`) |
+| `KEYCLOAK_ADMIN_CLIENT_ID` | Confidential client with `view-users` and `query-users` roles |
+| `KEYCLOAK_ADMIN_CLIENT_SECRET` | Secret for the admin client |
+
+#### Postgres (for API key storage)
+
+| Variable | Description |
+|----------|-------------|
+| `AUTH_DB_URL` | Postgres connection URL (e.g. `postgres://user:pass@host:5432/dbname`) |
+
+### Agent Scopes & Permissions
+
+Agents have a `scope` field controlling visibility and permissions:
+
+| Scope | Visible to | Editable by | Deletable by |
+|-------|-----------|-------------|-------------|
+| `global` | Everyone | Global admins only | Global admins only |
+| `team` | Team members | Creator + team admins | Creator + team admins |
+| `user` *(default)* | Creator only | Creator only | Creator only |
+
+Team-scoped agents require a `team` field matching the user's group name.
+
+### API Keys
+
+Create/manage personal API keys via REST:
+
+```bash
+# Create a key
+curl -X POST http://localhost:3000/api/v1/api-keys \
+  -H "Authorization: Bearer <jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-script"}'
+# Returns: {"id": "...", "name": "my-script", "key_prefix": "afk_a1b2c3d4", "full_key": "afk_a1b2c3d4..."}
+
+# List your keys
+curl http://localhost:3000/api/v1/api-keys \
+  -H "Authorization: Bearer <jwt>"
+
+# Revoke a key
+curl -X DELETE http://localhost:3000/api/v1/api-keys/<id> \
+  -H "Authorization: Bearer <jwt>"
+```
+
+Keys are stored as SHA-256 hashes. On each use, the owner's groups and roles are fetched from Keycloak Admin API with a 60-second cache, so revoking a user's Keycloak roles immediately affects their API key access.
+
+### Example Configuration
+
+```bash
+# Minimal (auth enabled, Keycloak defaults)
+export AUTH_ISSUER="https://keycloak.example.com/realms/opendev"
+export AUTH_DB_URL="postgres://opendev:secret@localhost:5432/opendev"
+
+# Full configuration
+export AUTH_ISSUER="https://keycloak.example.com/realms/opendev"
+export AUTH_AUDIENCE="agentfoundry"
+export AUTH_ROLES_CLAIM="realm_access.roles"
+export AUTH_GROUPS_CLAIM="groups"
+export AUTH_ACCESS_ROLES="opendev-user"
+export AUTH_ADMIN_ROLES="opendev-admin"
+export AUTH_TEAM_ADMIN_ROLE="team-admin"
+export KEYCLOAK_URL="https://keycloak.example.com"
+export KEYCLOAK_REALM="opendev"
+export KEYCLOAK_ADMIN_CLIENT_ID="opendev-admin"
+export KEYCLOAK_ADMIN_CLIENT_SECRET="super-secret"
+export AUTH_DB_URL="postgres://opendev:secret@localhost:5432/opendev"
+```
+
+### Keycloak Setup
+
+#### 1. Create the Realm
+
+Create a realm named `opendev` (or whatever matches your `AUTH_ISSUER` path).
+
+#### 2. Create Realm Roles
+
+| Role | Purpose |
+|------|---------|
+| `opendev-user` | Grants API access (all authenticated users should have this) |
+| `opendev-admin` | Global admin — full read/write/delete on all agents |
+| `team-admin` | Team admin — can edit/delete any agent in their teams |
+
+#### 3. Create Groups for Teams
+
+Create **top-level groups** (not nested) — one per team. The group name becomes the team name. For example, a group named `engineering` means users in that group are members of the `engineering` team.
+
+```
+opendev realm
+├── Groups
+│   ├── engineering
+│   ├── marketing
+│   └── product
+```
+
+Assign users to the appropriate groups.
+
+#### 4. Create the OIDC Client (for user login)
+
+Create a client with:
+- **Client ID**: `agentfoundry` (matches `AUTH_AUDIENCE`)
+- **Client authentication**: Off (public client for user login)
+- **Valid redirect URIs**: Your frontend callback URL
+- **Web origins**: Your frontend origin
+
+#### 5. Create the Admin Service Account (for API key group resolution)
+
+Create a **confidential client** with:
+- **Client ID**: `opendev-admin` (matches `KEYCLOAK_ADMIN_CLIENT_ID`)
+- **Client authentication**: On (client credentials enabled)
+- **Service account roles**: Assign `view-users` and `query-users` from `realm-management`
+
+Go to **Clients > opendev-admin > Service account roles** and add:
+- `realm-management` → `view-users`
+- `realm-management` → `query-users`
+
+Record the client secret — this goes in `KEYCLOAK_ADMIN_CLIENT_SECRET`.
+
+#### 6. Assign Roles to Users
+
+For each user, assign:
+- `opendev-user` role (required for API access)
+- `opendev-admin` role (for global admins only)
+- `team-admin` role (for team admins — grants admin across all their teams)
+
+#### 7. (Optional) Create a Service Account Client for Machine-to-Machine
+
+If external services need to call the API without a human user:
+- Create a confidential client
+- Assign it the appropriate realm roles (`opendev-user`, `opendev-admin`, etc.)
+- Use client credentials grant to obtain a token
+
+```bash
+curl -X POST https://keycloak.example.com/realms/opendev/protocol/openid-connect/token \
+  -d "grant_type=client_credentials" \
+  -d "client_id=my-service" \
+  -d "client_secret=secret"
+```
+
+The token's `azp` claim becomes the `Subject` in the auth context.
+
 ## Project Structure
 
 ```
-agentfile/
-├── cmd/agentfile/main.go       # Daemon entrypoint
+agentfoundry/
+├── cmd/agentfoundry/main.go       # Daemon entrypoint
 ├── internal/
+│   ├── api/                    # REST API (agents, chat, API keys)
+│   ├── auth/                   # OIDC JWT validation, API key store, middleware
 │   ├── config/                 # System config, agent definitions, YAML loader
-│   ├── registry/               # Agent definition store
-│   ├── mcpclient/              # MCP client pool (connects to external servers)
-│   ├── agent/                  # Agent runtime (LLM conversation loop)
-│   ├── mcp/                    # Per-agent Streamable HTTP MCP servers
+│   ├── db/                     # Postgres pool + auto-migration
 │   ├── llm/                    # OpenAI-compatible LLM client
-│   └── api/                    # REST API
+│   ├── mcp/                    # Per-agent Streamable HTTP MCP servers
+│   ├── mcpclient/              # MCP client pool (connects to external servers)
+│   ├── registry/               # Agent definition store
+│   ├── session/                # In-memory chat session store
+│   ├── stream/                 # SSE stream manager
+│   └── temporal/               # Temporal workflow client
 ├── definitions/                # Agent YAML definitions (hot-reloaded)
-├── agentfile.yaml              # System configuration
+├── agentfoundry.yaml              # System configuration
 ├── Dockerfile
 └── go.mod
 ```
@@ -176,35 +385,44 @@ agentfile/
 ## Architecture
 
 ```
-                  ┌──────────────────────────────────────┐
-                  │            agentfile                  │
-                  │                                      │
-  MCP clients ──> │  /servers/{agent}  (Streamable HTTP) │
-                  │        │                             │
-  REST calls ──>  │  /api/v1/agents/{name}/run           │
-                  │        │                             │
-                  │        v                             │
-                  │  ┌──────────┐    ┌───────────────┐   │
-                  │  │  Agent   │───>│  MCP Client   │   │
-                  │  │  Runtime │    │  Pool          │   │
-                  │  │  (LLM)  │    │               │   │
-                  │  └──────────┘    └───────┬───────┘   │
-                  └─────────────────────────│───────────┘
-                                            │
-                              ┌─────────────┼─────────────┐
-                              v             v             v
-                        ┌──────────┐  ┌──────────┐  ┌──────────┐
-                        │ MCP Srv  │  │ MCP Srv  │  │ MCP Srv  │
-                        │ (srvd)   │  │ (github) │  │ (files)  │
-                        └──────────┘  └──────────┘  └──────────┘
-                         External MCP servers (tools)
+                   ┌──────────────────────────────────────┐
+                   │            agentfoundry                  │
+                   │                                      │
+   MCP clients ──> │  /servers/{agent}  (Streamable HTTP) │
+                   │        │                             │
+   REST calls ──>  │  auth middleware ──────────────────┐ │
+                   │        │                          │ │
+                   │        v                          v │
+                   │  ┌──────────┐            ┌────────┐ │
+                   │  │  Agent   │            │ API Key│ │
+                   │  │  Runtime │            │ Store  │ │
+                   │  │  (LLM)  │            │(PgSQL) │ │
+                   │  └──────────┘            └────────┘ │
+                   │      │                             │
+                   │      v                             │
+                   │  ┌───────────────┐                 │
+                   │  │  MCP Client   │                 │
+                   │  │  Pool          │                 │
+                   │  └───────┬───────┘                 │
+                   └──────────│─────────────────────────┘
+                              │
+            ┌─────────────────┼─────────────────┐
+            v                 v                 v
+      ┌──────────┐     ┌──────────┐     ┌──────────┐
+      │ MCP Srv  │     │ MCP Srv  │     │ MCP Srv  │
+      │ (srvd)   │     │ (github) │     │ (files)  │
+      └──────────┘     └──────────┘     └──────────┘
+       External MCP servers (tools)
+
+   Auth flow:
+   Bearer token ──> JWT or API key ──> Keycloak (JWT verify / Admin API groups)
 ```
 
 ## MCP Server Transports
 
-agentfile supports connecting to external MCP servers via two transports:
+agentfoundry supports connecting to external MCP servers via two transports:
 
 - **`sse`** (default) — Legacy Server-Sent Events transport
 - **`streamable-http`** — Newer Streamable HTTP transport
 
-All MCP servers that agentfile *exposes* use Streamable HTTP.
+All MCP servers that agentfoundry *exposes* use Streamable HTTP.

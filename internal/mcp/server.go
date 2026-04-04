@@ -11,10 +11,10 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/angoo/agentfile/internal/config"
-	"github.com/angoo/agentfile/internal/mcpclient"
-	"github.com/angoo/agentfile/internal/registry"
-	"github.com/angoo/agentfile/internal/temporal"
+	"github.com/angoo/agentfoundry/internal/config"
+	"github.com/angoo/agentfoundry/internal/mcpclient"
+	"github.com/angoo/agentfoundry/internal/registry"
+	"github.com/angoo/agentfoundry/internal/temporal"
 )
 
 type Manager struct {
@@ -78,7 +78,7 @@ func (m *Manager) getOrCreateServer(name string) *server.StreamableHTTPServer {
 }
 
 func (m *Manager) createDefaultServer() *server.StreamableHTTPServer {
-	mcpServer := server.NewMCPServer("agentfile-default", "1.0.0",
+	mcpServer := server.NewMCPServer("agentfoundry-default", "1.0.0",
 		server.WithToolCapabilities(true),
 	)
 
@@ -100,7 +100,7 @@ func (m *Manager) createAgentServer(name string) *server.StreamableHTTPServer {
 		return nil
 	}
 
-	mcpServer := server.NewMCPServer("agentfile-"+name, "1.0.0",
+	mcpServer := server.NewMCPServer("agentfoundry-"+name, "1.0.0",
 		server.WithToolCapabilities(true),
 	)
 

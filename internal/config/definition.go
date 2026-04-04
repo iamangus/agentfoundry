@@ -12,14 +12,17 @@ import (
 type Definition struct {
 	Kind               Kind              `yaml:"kind" json:"kind"`
 	Name               string            `yaml:"name" json:"name"`
-	Description        string            `yaml:"description" json:"description"`
+	Description        string            `yaml:"description" json:"description,omitempty"`
 	Model              string            `yaml:"model,omitempty" json:"model,omitempty"`
 	SystemPrompt       string            `yaml:"system_prompt" json:"system_prompt"`
-	Tools              []string          `yaml:"tools,omitempty" json:"tools,omitempty"` // namespaced: "server.tool" or agent name
+	Tools              []string          `yaml:"tools,omitempty" json:"tools,omitempty"`
 	MaxTurns           int               `yaml:"max_turns,omitempty" json:"max_turns,omitempty"`
 	MaxConcurrentTools int               `yaml:"max_concurrent_tools,omitempty" json:"max_concurrent_tools,omitempty"`
 	ForceJSON          bool              `yaml:"force_json,omitempty" json:"force_json,omitempty"`
 	StructuredOutput   *StructuredOutput `yaml:"structured_output,omitempty" json:"structured_output,omitempty"`
+	Scope              string            `yaml:"scope,omitempty" json:"scope,omitempty"`
+	Team               string            `yaml:"team,omitempty" json:"team,omitempty"`
+	CreatedBy          string            `yaml:"created_by,omitempty" json:"created_by,omitempty"`
 }
 
 // StructuredOutput configures JSON Schema constrained responses.
@@ -102,7 +105,14 @@ const (
 	KindAgent Kind = "agent"
 )
 
-// Validate checks that the definition has required fields set.
+type Scope string
+
+const (
+	ScopeGlobal Scope = "global"
+	ScopeTeam   Scope = "team"
+	ScopeUser   Scope = "user"
+)
+
 func (d *Definition) Validate() error {
 	if d.Name == "" {
 		return ErrMissingName
@@ -116,5 +126,91 @@ func (d *Definition) Validate() error {
 	if d.SystemPrompt == "" {
 		return ErrMissingSystemPrompt
 	}
+	if d.Scope != "" {
+		s := Scope(d.Scope)
+		if s != ScopeGlobal && s != ScopeTeam && s != ScopeUser {
+			return ErrInvalidScope
+		}
+	}
+	if Scope(d.Scope) == ScopeTeam && d.Team == "" {
+		return ErrTeamRequired
+	}
 	return nil
+}
+
+// VisibleTo returns true if the agent is visible to the given subject, teams, and admin status.
+func (d *Definition) VisibleTo(subject string, teams []string, isGlobalAdmin bool) bool {
+	if isGlobalAdmin {
+		return true
+	}
+	switch Scope(d.Scope) {
+	case ScopeGlobal, "":
+		return true
+	case ScopeTeam:
+		for _, t := range teams {
+			if t == d.Team {
+				return true
+			}
+		}
+		return false
+	case ScopeUser:
+		return d.CreatedBy == subject
+	}
+	return false
+}
+
+// CanEdit returns true if the given subject can edit the agent.
+func (d *Definition) CanEdit(subject string, teams []string, isGlobalAdmin, isTeamAdmin bool) bool {
+	if isGlobalAdmin {
+		return true
+	}
+	switch Scope(d.Scope) {
+	case ScopeGlobal:
+		return false
+	case ScopeTeam:
+		if !d.IsMemberOfTeam(teams) {
+			return false
+		}
+		if d.CreatedBy == subject {
+			return true
+		}
+		if isTeamAdmin {
+			return true
+		}
+		return false
+	case ScopeUser, "":
+		return d.CreatedBy == subject
+	}
+	return false
+}
+
+// CanDelete returns true if the given subject can delete the agent.
+func (d *Definition) CanDelete(subject string, teams []string, isGlobalAdmin, isTeamAdmin bool) bool {
+	if isGlobalAdmin {
+		return true
+	}
+	switch Scope(d.Scope) {
+	case ScopeGlobal:
+		return false
+	case ScopeTeam:
+		if d.CreatedBy == subject {
+			return true
+		}
+		if isTeamAdmin {
+			return true
+		}
+		return false
+	case ScopeUser, "":
+		return d.CreatedBy == subject
+	}
+	return false
+}
+
+func (d *Definition) IsMemberOfTeam(teams []string) bool {
+	for _, t := range teams {
+		if t == d.Team {
+			return true
+		}
+	}
+	return false
 }

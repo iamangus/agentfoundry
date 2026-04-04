@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/angoo/agentfile/internal/config"
+	"github.com/angoo/agentfoundry/internal/config"
 )
 
 // Registry stores agent definitions.

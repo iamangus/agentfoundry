@@ -1,8 +1,8 @@
-# Compiled binary (go build -o agentfile ./cmd/agentfile/)
-/agentfile
+# Compiled binary (go build -o agentfoundry ./cmd/agentfoundry/)
+/agentfoundry
 
-# Runtime config (may contain secrets; use agentfile.example.yaml as template)
-agentfile.yaml
+# Runtime config (may contain secrets; use agentfoundry.example.yaml as template)
+agentfoundry.yaml
 
 # Go build artifacts
 *.exe

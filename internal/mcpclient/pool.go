@@ -150,7 +150,7 @@ func (p *Pool) connectOne(ctx context.Context, srv ServerConfig) error {
 		Params: mcp.InitializeParams{
 			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
 			ClientInfo: mcp.Implementation{
-				Name:    "agentfile",
+				Name:    "agentfoundry",
 				Version: "0.1.0",
 			},
 			Capabilities: mcp.ClientCapabilities{},
@@ -362,7 +362,7 @@ func ConnectEphemeral(ctx context.Context, srv ServerConfig) (*EphemeralConn, er
 		Params: mcp.InitializeParams{
 			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
 			ClientInfo: mcp.Implementation{
-				Name:    "agentfile",
+				Name:    "agentfoundry",
 				Version: "0.1.0",
 			},
 			Capabilities: mcp.ClientCapabilities{},
