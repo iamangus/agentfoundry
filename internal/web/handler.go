@@ -417,6 +417,8 @@ func (h *Handler) runEvents(w http.ResponseWriter, r *http.Request) {
 				fmt.Fprintf(w, "event: status\ndata: %s\n\n", template.HTMLEscapeString(evt.Data))
 			case "token":
 				fmt.Fprintf(w, "event: token\ndata: %s\n\n", template.HTMLEscapeString(evt.Data))
+			case "response_start":
+				fmt.Fprintf(w, "event: response_start\n\n")
 			case "done":
 				sseData := strings.ReplaceAll(evt.Data, "\n", "\ndata: ")
 				fmt.Fprintf(w, "event: done\ndata: %s\n\n", sseData)

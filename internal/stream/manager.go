@@ -114,3 +114,9 @@ func (m *Manager) PublishError(id, html string) {
 		s.publish(Event{Type: "error", Data: html})
 	}
 }
+
+func (m *Manager) PublishEvent(id, eventType string) {
+	if s := m.Get(id); s != nil {
+		s.publish(Event{Type: eventType})
+	}
+}

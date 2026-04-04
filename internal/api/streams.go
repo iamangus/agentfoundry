@@ -25,3 +25,24 @@ func (h *Handler) publishStreamToken(w http.ResponseWriter, r *http.Request) {
 	h.streams.PublishToken(streamID, req.Token)
 	w.WriteHeader(http.StatusNoContent)
 }
+
+type streamEventRequest struct {
+	Type string `json:"type"`
+}
+
+func (h *Handler) publishStreamEvent(w http.ResponseWriter, r *http.Request) {
+	streamID := r.PathValue("id")
+	if streamID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "stream id is required"})
+		return
+	}
+
+	var req streamEventRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+
+	h.streams.PublishEvent(streamID, req.Type)
+	w.WriteHeader(http.StatusNoContent)
+}

@@ -264,21 +264,48 @@
 <script>
 function startRunStream(runId, container) {
   var es = new EventSource("/chat/runs/" + runId + "/events");
-  var bubble = null;
+  var messageList = document.getElementById("message-list");
+  var bubbles = [];
+  var currentBubble = null;
 
-  es.addEventListener("token", function(e) {
-    if (!bubble) {
-      bubble = document.createElement("div");
-      bubble.className = "bubble bubble-bot";
-      bubble.style.whiteSpace = "pre-wrap";
-      container.innerHTML = "";
-      container.appendChild(bubble);
+  function createBubble() {
+    var row = document.createElement("div");
+    row.className = "msg-row msg-left";
+    var bubble = document.createElement("div");
+    bubble.className = "bubble bubble-bot";
+    bubble.style.whiteSpace = "pre-wrap";
+    row.appendChild(bubble);
+    var anchor = messageList.querySelector(".scroll-anchor");
+    if (anchor) {
+      messageList.insertBefore(row, anchor);
+    } else {
+      messageList.appendChild(row);
     }
-    bubble.textContent += e.data;
-    var anchor = container.nextElementSibling;
-    if (anchor && anchor.classList.contains("scroll-anchor")) {
+    bubbles.push({ row: row, bubble: bubble });
+    currentBubble = bubble;
+    scrollToBottom();
+    return bubble;
+  }
+
+  function scrollToBottom() {
+    var anchor = messageList.querySelector(".scroll-anchor");
+    if (anchor) {
       anchor.scrollIntoView({ block: "end", behavior: "smooth" });
     }
+  }
+
+  es.addEventListener("response_start", function(e) {
+    container.innerHTML = "";
+    createBubble();
+  });
+
+  es.addEventListener("token", function(e) {
+    if (!currentBubble) {
+      container.innerHTML = "";
+      createBubble();
+    }
+    currentBubble.textContent += e.data;
+    scrollToBottom();
   });
 
   es.addEventListener("status", function(e) {
@@ -289,10 +316,18 @@ function startRunStream(runId, container) {
     var wrapper = document.createElement("div");
     wrapper.innerHTML = e.data;
     var newEl = wrapper.firstElementChild;
-    if (newEl) {
-      container.outerHTML = newEl.outerHTML;
+    var replacement = newEl ? newEl.outerHTML : e.data;
+
+    if (bubbles.length > 0) {
+      var last = bubbles[bubbles.length - 1];
+      last.row.outerHTML = replacement;
     } else {
-      container.outerHTML = e.data;
+      container.outerHTML = replacement;
+    }
+
+    for (var i = 0; i < bubbles.length - 1; i++) {
+      bubbles[i].bubble.style.whiteSpace = "";
+      bubbles[i].bubble.className = "bubble bubble-bot";
     }
   });
 
@@ -303,10 +338,18 @@ function startRunStream(runId, container) {
       var wrapper = document.createElement("div");
       wrapper.innerHTML = e.data;
       var newEl = wrapper.firstElementChild;
-      if (newEl) {
-        container.outerHTML = newEl.outerHTML;
+      var replacement = newEl ? newEl.outerHTML : e.data;
+
+      if (bubbles.length > 0) {
+        var last = bubbles[bubbles.length - 1];
+        last.row.outerHTML = replacement;
       } else {
-        container.outerHTML = e.data;
+        container.outerHTML = replacement;
+      }
+
+      for (var i = 0; i < bubbles.length - 1; i++) {
+        bubbles[i].bubble.style.whiteSpace = "";
+        bubbles[i].bubble.className = "bubble bubble-bot";
       }
     }
   });
