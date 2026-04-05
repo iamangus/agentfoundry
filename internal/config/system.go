@@ -14,9 +14,18 @@ type TemporalConf struct {
 	APIKey    string `yaml:"api_key"`
 }
 
+type S3Config struct {
+	Bucket   string `yaml:"bucket"`
+	Prefix   string `yaml:"prefix"`
+	Region   string `yaml:"region"`
+	Endpoint string `yaml:"endpoint"`
+	Enable   bool   `yaml:"enable"`
+}
+
 type SystemConfig struct {
 	Listen         string                   `yaml:"listen"`
 	DefinitionsDir string                   `yaml:"definitions_dir"`
+	S3             S3Config                 `yaml:"s3"`
 	Temporal       TemporalConf             `yaml:"temporal"`
 	MCPServers     []mcpclient.ServerConfig `yaml:"mcp_servers"`
 }
@@ -61,6 +70,25 @@ func LoadSystem(path string) (*SystemConfig, error) {
 		for k, v := range cfg.MCPServers[i].Headers {
 			cfg.MCPServers[i].Headers[k] = expandEnvVar(v)
 		}
+	}
+
+	if os.Getenv("S3_ENABLE") == "true" {
+		cfg.S3.Enable = true
+	}
+	if v := os.Getenv("S3_BUCKET"); v != "" {
+		cfg.S3.Bucket = v
+	}
+	if v := os.Getenv("S3_PREFIX"); v != "" {
+		cfg.S3.Prefix = v
+	}
+	if v := os.Getenv("S3_REGION"); v != "" {
+		cfg.S3.Region = v
+	}
+	if v := os.Getenv("S3_ENDPOINT"); v != "" {
+		cfg.S3.Endpoint = v
+	}
+	if cfg.S3.Prefix == "" {
+		cfg.S3.Prefix = "definitions/"
 	}
 
 	return cfg, nil

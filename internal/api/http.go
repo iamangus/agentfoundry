@@ -31,6 +31,20 @@ type DefinitionStore interface {
 	SaveRawDefinition(name string, data []byte) error
 }
 
+type VersionedStore interface {
+	DefinitionStore
+	ListVersions(ctx context.Context, name string) ([]AgentVersion, error)
+	GetVersion(ctx context.Context, name, versionID string) ([]byte, *config.Definition, error)
+	Rollback(ctx context.Context, name, versionID string) error
+}
+
+type AgentVersion struct {
+	VersionID    string `json:"version_id"`
+	LastModified string `json:"last_modified"`
+	Size         int64  `json:"size"`
+	IsLatest     bool   `json:"is_latest"`
+}
+
 type Handler struct {
 	store    DefinitionStore
 	reg      *registry.Registry
@@ -57,6 +71,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/agents", h.listAgents)
 	mux.HandleFunc("GET /api/v1/agents/{name}", h.getAgent)
 	mux.HandleFunc("GET /api/v1/agents/{name}/raw", h.getRawAgent)
+	mux.HandleFunc("GET /api/v1/agents/{name}/versions", h.listVersions)
+	mux.HandleFunc("GET /api/v1/agents/{name}/version", h.getVersion)
+	mux.HandleFunc("POST /api/v1/agents/{name}/rollback", h.rollbackVersion)
 	mux.HandleFunc("POST /api/v1/agents", h.createAgent)
 	mux.HandleFunc("PUT /api/v1/agents/{name}", h.updateAgent)
 	mux.HandleFunc("DELETE /api/v1/agents/{name}", h.deleteAgent)
@@ -256,6 +273,106 @@ func (h *Handler) deleteAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (h *Handler) listVersions(w http.ResponseWriter, r *http.Request) {
+	vs, ok := h.store.(VersionedStore)
+	if !ok {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "versioning not available"})
+		return
+	}
+
+	name := r.PathValue("name")
+	def := h.store.GetDefinition(name)
+	if def == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+
+	versions, err := vs.ListVersions(r.Context(), name)
+	if err != nil {
+		slog.Error("failed to list versions", "agent", name, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list versions"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"versions": versions})
+}
+
+func (h *Handler) getVersion(w http.ResponseWriter, r *http.Request) {
+	vs, ok := h.store.(VersionedStore)
+	if !ok {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "versioning not available"})
+		return
+	}
+
+	name := r.PathValue("name")
+	versionID := r.URL.Query().Get("version_id")
+	if versionID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "version_id query parameter required"})
+		return
+	}
+
+	def := h.store.GetDefinition(name)
+	if def == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+
+	raw, parsed, err := vs.GetVersion(r.Context(), name, versionID)
+	if err != nil {
+		slog.Error("failed to get version", "agent", name, "version", versionID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get version"})
+		return
+	}
+
+	type versionResponse struct {
+		YAML       string             `json:"yaml"`
+		Definition *config.Definition `json:"definition"`
+	}
+	writeJSON(w, http.StatusOK, versionResponse{YAML: string(raw), Definition: parsed})
+}
+
+func (h *Handler) rollbackVersion(w http.ResponseWriter, r *http.Request) {
+	vs, ok := h.store.(VersionedStore)
+	if !ok {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "versioning not available"})
+		return
+	}
+
+	ac := auth.FromContext(r)
+	if ac == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+
+	name := r.PathValue("name")
+	versionID := r.URL.Query().Get("version_id")
+	if versionID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "version_id query parameter required"})
+		return
+	}
+
+	existing := h.store.GetDefinition(name)
+	if existing == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+
+	if !existing.CanEdit(ac.Subject, ac.Teams, ac.IsGlobalAdmin, ac.IsTeamAdmin) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
+		return
+	}
+
+	if err := vs.Rollback(r.Context(), name, versionID); err != nil {
+		slog.Error("failed to rollback", "agent", name, "version", versionID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to rollback"})
+		return
+	}
+
+	slog.Info("rolled back agent", "agent", name, "version", versionID, "user", ac.Subject)
+	restored := h.store.GetDefinition(name)
+	writeJSON(w, http.StatusOK, restored)
 }
 
 func (h *Handler) listTools(w http.ResponseWriter, r *http.Request) {

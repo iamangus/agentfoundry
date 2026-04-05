@@ -10,6 +10,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awscfg "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+
 	"github.com/angoo/agentfoundry/internal/api"
 	"github.com/angoo/agentfoundry/internal/auth"
 	"github.com/angoo/agentfoundry/internal/config"
@@ -18,6 +22,7 @@ import (
 	"github.com/angoo/agentfoundry/internal/mcpclient"
 	"github.com/angoo/agentfoundry/internal/registry"
 	"github.com/angoo/agentfoundry/internal/session"
+	"github.com/angoo/agentfoundry/internal/store"
 	"github.com/angoo/agentfoundry/internal/stream"
 	"github.com/angoo/agentfoundry/internal/temporal"
 )
@@ -99,6 +104,47 @@ func main() {
 
 	reg := registry.New()
 
+	var definitionStore api.DefinitionStore
+
+	if cfg.S3.Enable {
+		s3Cfg, err := awscfg.LoadDefaultConfig(context.Background(),
+			awscfg.WithRegion(cfg.S3.Region),
+		)
+		if err != nil {
+			slog.Error("failed to load AWS config", "error", err)
+			os.Exit(1)
+		}
+
+		var s3Opts []func(*s3.Options)
+		if cfg.S3.Endpoint != "" {
+			s3Opts = append(s3Opts, func(o *s3.Options) {
+				o.BaseEndpoint = aws.String(cfg.S3.Endpoint)
+			})
+		}
+
+		s3Client := s3.NewFromConfig(s3Cfg, s3Opts...)
+		s3Store := store.NewS3Store(s3Client, cfg.S3.Bucket, cfg.S3.Prefix, reg)
+
+		if err := s3Store.LoadAll(context.Background()); err != nil {
+			slog.Error("failed to load definitions from S3", "error", err)
+			os.Exit(1)
+		}
+		definitionStore = s3Store
+		slog.Info("S3 store initialized", "bucket", cfg.S3.Bucket, "prefix", cfg.S3.Prefix)
+	} else {
+		loader := config.NewLoader(cfg.DefinitionsDir, reg)
+		if err := loader.LoadAll(); err != nil {
+			slog.Error("failed to load definitions", "error", err)
+			os.Exit(1)
+		}
+
+		if err := loader.Watch(); err != nil {
+			slog.Warn("failed to start filesystem watcher", "error", err)
+		}
+		defer loader.Close()
+		definitionStore = loader
+	}
+
 	pool := mcpclient.NewPool()
 
 	ctx := context.Background()
@@ -117,17 +163,6 @@ func main() {
 	}
 	defer temporalClient.Close()
 
-	loader := config.NewLoader(cfg.DefinitionsDir, reg)
-	if err := loader.LoadAll(); err != nil {
-		slog.Error("failed to load definitions", "error", err)
-		os.Exit(1)
-	}
-
-	if err := loader.Watch(); err != nil {
-		slog.Warn("failed to start filesystem watcher", "error", err)
-	}
-	defer loader.Close()
-
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -145,7 +180,7 @@ func main() {
 	streams := stream.NewManager()
 	sessions := session.New()
 
-	apiHandler := api.NewHandler(reg, pool, loader, temporalClient, streams, sessions, keyStore)
+	apiHandler := api.NewHandler(reg, pool, definitionStore, temporalClient, streams, sessions, keyStore)
 	apiHandler.RegisterRoutes(mux)
 
 	var handler http.Handler = mux

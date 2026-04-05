@@ -1,10 +1,10 @@
 # agentfoundry
 
-A system for defining and running AI agents via YAML configuration. Agents are backed by any OpenAI-compatible LLM API (OpenRouter, OpenAI, Ollama, Together AI, Azure OpenAI, etc.) and have access to tools discovered from external MCP servers. Each agent is exposed as its own MCP server, so agents can be composed — one agent can call another as a tool.
+Backend service for defining, managing, and orchestrating AI agents. Agent definitions are stored as YAML files (locally or in S3 with versioning) and exposed as individual MCP servers for composability. Agent runs are dispatched to [agentfoundry-worker](https://github.com/angoo/agentfoundry-worker) via Temporal workflows. Supports OIDC authentication (Keycloak), role-based access control, team-scoped agents, and personal API keys.
 
 ## Concepts
 
-**Agent** — A YAML definition that combines a system prompt, an LLM model, and a set of tools. When called, the agent runs a multi-turn LLM conversation, invoking tools as needed, and returns a final response.
+**Agent** — A YAML definition that combines a system prompt, an LLM model, and a set of tools. When called, the agent is dispatched as a Temporal workflow to a worker process, which runs a multi-turn LLM conversation, invoking tools as needed, and returns a final response.
 
 **Tool** — A capability discovered from an external MCP server. Tools are referenced by agents using namespaced syntax: `server.tool` (e.g. `srvd.searxng_web_search`).
 
@@ -12,18 +12,22 @@ A system for defining and running AI agents via YAML configuration. Agents are b
 
 **Composability** — An agent can list another agent in its `tools:` section. When called, the sub-agent runs its own LLM loop and returns a response, enabling multi-agent workflows.
 
+**S3 Versioning** — Agent definitions can be stored in S3 (or any S3-compatible store like RustFS) instead of local files. Every save creates a new version, enabling version history, diffs, and rollback.
+
 ## Quick Start
 
 ### Prerequisites
 
 - Go 1.21+
-- An API key for any OpenAI-compatible provider ([OpenRouter](https://openrouter.ai/), [OpenAI](https://platform.openai.com/), [Together AI](https://www.together.ai/), or a local [Ollama](https://ollama.com/) instance)
+- A running [Temporal](https://temporal.io/) server
+- [agentfoundry-worker](https://github.com/angoo/agentfoundry-worker) running (the worker handles LLM calls)
+- (Optional) Keycloak for OIDC authentication
+- (Optional) S3-compatible storage for versioned agent definitions
 
 ### Build and Run
 
 ```bash
 go build -o agentfoundry ./cmd/agentfoundry/
-export OPENROUTER_API_KEY="sk-or-..."   # or any OpenAI-compatible API key
 ./agentfoundry
 ```
 
@@ -32,7 +36,6 @@ export OPENROUTER_API_KEY="sk-or-..."   # or any OpenAI-compatible API key
 ```bash
 docker build -t agentfoundry .
 docker run -p 3000:3000 \
-  -e OPENROUTER_API_KEY="sk-or-..." \
   -v $(pwd)/data:/data \
   agentfoundry
 ```
@@ -45,7 +48,15 @@ The container stores all persistent data under `/data` (definitions and config).
 
 ```yaml
 listen: ":3000"
-definitions_dir: "./definitions"
+definitions_dir: "./definitions"  # local filesystem (default)
+
+# S3 storage with versioning (optional, replaces local filesystem)
+s3:
+  enable: true
+  bucket: "agentfoundry"
+  prefix: "definitions/"
+  endpoint: "https://rustfs.example.com"  # or any S3-compatible endpoint
+  region: "us-east-1"
 
 temporal:
   host_port: "localhost:7233"
@@ -66,7 +77,7 @@ All auth configuration is via environment variables (see [Authentication & Autho
 
 ### Agent Definition
 
-Agent definitions are YAML files in the `definitions/` directory. They are hot-reloaded when changed.
+Agent definitions are YAML files. By default they are stored in the `definitions/` directory and hot-reloaded when changed. Alternatively, they can be stored in S3 with automatic versioning (see S3 configuration above).
 
 ```yaml
 kind: agent
@@ -104,6 +115,14 @@ team: engineering     # required when scope is "team"
 | `PUT` | `/api/v1/agents/{name}` | Update agent (permission-checked) |
 | `DELETE` | `/api/v1/agents/{name}` | Delete agent (permission-checked) |
 | `POST` | `/api/v1/agents/{name}/run` | Run an agent |
+
+#### Versioning (S3 storage only)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/v1/agents/{name}/versions` | List version history |
+| `GET` | `/api/v1/agents/{name}/version?version_id=xyz` | View a specific version |
+| `POST` | `/api/v1/agents/{name}/rollback?version_id=xyz` | Restore a previous version (owner-only) |
 
 ### Chat Sessions
 
@@ -365,19 +384,19 @@ The token's `azp` claim becomes the `Subject` in the auth context.
 agentfoundry/
 ├── cmd/agentfoundry/main.go       # Daemon entrypoint
 ├── internal/
-│   ├── api/                    # REST API (agents, chat, API keys)
+│   ├── api/                    # REST API (agents, chat, API keys, versioning)
 │   ├── auth/                   # OIDC JWT validation, API key store, middleware
 │   ├── config/                 # System config, agent definitions, YAML loader
 │   ├── db/                     # Postgres pool + auto-migration
-│   ├── llm/                    # OpenAI-compatible LLM client
 │   ├── mcp/                    # Per-agent Streamable HTTP MCP servers
 │   ├── mcpclient/              # MCP client pool (connects to external servers)
-│   ├── registry/               # Agent definition store
+│   ├── registry/               # In-memory agent definition registry
 │   ├── session/                # In-memory chat session store
+│   ├── store/                  # S3-backed definition store with versioning
 │   ├── stream/                 # SSE stream manager
-│   └── temporal/               # Temporal workflow client
-├── definitions/                # Agent YAML definitions (hot-reloaded)
-├── agentfoundry.yaml              # System configuration
+│   └── temporal/               # Temporal workflow client (dispatches to worker)
+├── definitions/                # Agent YAML definitions (filesystem mode)
+├── agentfoundry.yaml           # System configuration
 ├── Dockerfile
 └── go.mod
 ```
@@ -385,37 +404,42 @@ agentfoundry/
 ## Architecture
 
 ```
-                   ┌──────────────────────────────────────┐
-                   │            agentfoundry                  │
-                   │                                      │
-   MCP clients ──> │  /servers/{agent}  (Streamable HTTP) │
-                   │        │                             │
-   REST calls ──>  │  auth middleware ──────────────────┐ │
-                   │        │                          │ │
-                   │        v                          v │
-                   │  ┌──────────┐            ┌────────┐ │
-                   │  │  Agent   │            │ API Key│ │
-                   │  │  Runtime │            │ Store  │ │
-                   │  │  (LLM)  │            │(PgSQL) │ │
-                   │  └──────────┘            └────────┘ │
-                   │      │                             │
-                   │      v                             │
-                   │  ┌───────────────┐                 │
-                   │  │  MCP Client   │                 │
-                   │  │  Pool          │                 │
-                   │  └───────┬───────┘                 │
-                   └──────────│─────────────────────────┘
-                              │
-            ┌─────────────────┼─────────────────┐
-            v                 v                 v
-      ┌──────────┐     ┌──────────┐     ┌──────────┐
-      │ MCP Srv  │     │ MCP Srv  │     │ MCP Srv  │
-      │ (srvd)   │     │ (github) │     │ (files)  │
-      └──────────┘     └──────────┘     └──────────┘
-       External MCP servers (tools)
+                    ┌──────────────────────────────────────┐
+                    │            agentfoundry                  │
+                    │         (backend orchestrator)          │
+                    │                                      │
+    MCP clients ──> │  /servers/{agent}  (Streamable HTTP) │
+                    │        │                             │
+    REST calls ──>  │  auth middleware ──────────────────┐ │
+                    │        │                          │ │
+                    │        v                          v │
+                    │  ┌──────────┐            ┌────────┐ │
+                    │  │  Agent   │            │ API Key│ │
+                    │  │  Store   │            │ Store  │ │
+                    │  │ (S3/FS) │            │(PgSQL) │ │
+                    │  └──────────┘            └────────┘ │
+                    │      │                             │
+                    │      v                             │
+                    │  Temporal ──> agentfoundry-worker    │
+                    │  (dispatch)   (LLM calls + tools)   │
+                    │      │                             │
+                    │      v                             │
+                    │  ┌───────────────┐                 │
+                    │  │  MCP Client   │                 │
+                    │  │  Pool          │                 │
+                    │  └───────┬───────┘                 │
+                    └──────────│─────────────────────────┘
+                               │
+             ┌─────────────────┼─────────────────┐
+             v                 v                 v
+       ┌──────────┐     ┌──────────┐     ┌──────────┐
+       │ MCP Srv  │     │ MCP Srv  │     │ MCP Srv  │
+       │ (srvd)   │     │ (github) │     │ (files)  │
+       └──────────┘     └──────────┘     └──────────┘
+        External MCP servers (tools)
 
-   Auth flow:
-   Bearer token ──> JWT or API key ──> Keycloak (JWT verify / Admin API groups)
+    Auth flow:
+    Bearer token ──> JWT or API key ──> Keycloak (JWT verify / Admin API groups)
 ```
 
 ## MCP Server Transports
