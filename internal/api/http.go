@@ -84,7 +84,18 @@ func (h *Handler) listAgents(w http.ResponseWriter, r *http.Request) {
 	ac := auth.FromContext(r)
 	allDefs := h.store.ListDefinitions()
 
-	if ac == nil || !ac.IsGlobalAdmin {
+	if ac == nil {
+		var visible []*config.Definition
+		for _, d := range allDefs {
+			if d.VisibleTo("", nil, false) {
+				visible = append(visible, d)
+			}
+		}
+		writeJSON(w, http.StatusOK, visible)
+		return
+	}
+
+	if !ac.IsGlobalAdmin {
 		var visible []*config.Definition
 		for _, d := range allDefs {
 			if d.VisibleTo(ac.Subject, ac.Teams, ac.IsGlobalAdmin) {
