@@ -73,6 +73,14 @@ func (m *Middleware) authenticate(r *http.Request) (*AuthContext, error) {
 		return nil, ErrUnauthorized
 	}
 
+	if m.config.InternalAPIKey != "" && token == m.config.InternalAPIKey {
+		return &AuthContext{
+			Subject:       "internal",
+			AuthMethod:    "internal",
+			IsGlobalAdmin: true,
+		}, nil
+	}
+
 	if strings.HasPrefix(token, keyPrefix) {
 		return m.authenticateAPIKey(r.Context(), token)
 	}

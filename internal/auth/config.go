@@ -16,6 +16,7 @@ type Config struct {
 		ClientID     string
 		ClientSecret string
 	}
+	InternalAPIKey string
 }
 
 func LoadConfig() *Config {
@@ -58,6 +59,7 @@ func LoadConfig() *Config {
 			ClientID:     os.Getenv("KEYCLOAK_ADMIN_CLIENT_ID"),
 			ClientSecret: os.Getenv("KEYCLOAK_ADMIN_CLIENT_SECRET"),
 		},
+		InternalAPIKey: os.Getenv("WORKER_API_KEY"),
 	}
 }
 
