@@ -95,6 +95,38 @@ func (c *Client) ExecuteWorkflowSync(ctx context.Context, params RunAgentParams)
 	return &result, nil
 }
 
+func (c *Client) StartWorkflow(ctx context.Context, params RunAgentParams) (workflowID string, await func(context.Context) (*RunAgentResult, error), err error) {
+	workflowID = params.AgentName + "-" + randomID()
+	workflowOpts := client.StartWorkflowOptions{
+		ID:        workflowID,
+		TaskQueue: TaskQueue,
+	}
+
+	wfRun, err := c.c.ExecuteWorkflow(ctx, workflowOpts, WorkflowType, params)
+	if err != nil {
+		return "", nil, fmt.Errorf("start workflow: %w", err)
+	}
+	slog.Info("started temporal workflow (async)", "workflow_id", workflowID, "agent", params.AgentName)
+
+	await = func(ctx context.Context) (*RunAgentResult, error) {
+		var result RunAgentResult
+		if err := wfRun.Get(ctx, &result); err != nil {
+			return nil, fmt.Errorf("workflow execution: %w", err)
+		}
+		return &result, nil
+	}
+	return workflowID, await, nil
+}
+
+func (c *Client) CancelWorkflow(ctx context.Context, workflowID string) error {
+	err := c.c.CancelWorkflow(ctx, workflowID, "")
+	if err != nil {
+		return fmt.Errorf("cancel workflow %s: %w", workflowID, err)
+	}
+	slog.Info("canceled temporal workflow", "workflow_id", workflowID)
+	return nil
+}
+
 func (c *Client) Close() {
 	c.c.Close()
 }

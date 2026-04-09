@@ -425,6 +425,36 @@ func (e *EphemeralConn) Close() {
 	e.client.Close()
 }
 
+// RegisterEphemeral adds an EphemeralConn to the pool under its server name.
+// Tools from the ephemeral connection become visible via ListAllTools and
+// CallTool. Call UnregisterEphemeral to remove it.
+func (p *Pool) RegisterEphemeral(e *EphemeralConn) {
+	conn := &connection{
+		client: e.client,
+		config: e.config,
+		tools:  e.tools,
+	}
+	p.mu.Lock()
+	p.conns[e.config.Name] = conn
+	p.mu.Unlock()
+	slog.Info("registered ephemeral MCP server in pool", "name", e.config.Name, "tools", len(e.tools))
+}
+
+// UnregisterEphemeral removes a server from the pool by name and closes its
+// underlying connection. If the server was not registered this is a no-op.
+func (p *Pool) UnregisterEphemeral(name string) {
+	p.mu.Lock()
+	conn, ok := p.conns[name]
+	if !ok {
+		p.mu.Unlock()
+		return
+	}
+	delete(p.conns, name)
+	p.mu.Unlock()
+	conn.client.Close()
+	slog.Info("unregistered ephemeral MCP server from pool", "name", name)
+}
+
 // Close shuts down all MCP client connections.
 func (p *Pool) Close() {
 	p.mu.Lock()

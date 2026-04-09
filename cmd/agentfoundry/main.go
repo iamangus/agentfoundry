@@ -21,6 +21,7 @@ import (
 	mcpserver "github.com/angoo/agentfoundry/internal/mcp"
 	"github.com/angoo/agentfoundry/internal/mcpclient"
 	"github.com/angoo/agentfoundry/internal/registry"
+	"github.com/angoo/agentfoundry/internal/run"
 	"github.com/angoo/agentfoundry/internal/session"
 	"github.com/angoo/agentfoundry/internal/store"
 	"github.com/angoo/agentfoundry/internal/stream"
@@ -179,8 +180,9 @@ func main() {
 
 	streams := stream.NewManager()
 	sessions := session.New()
+	runs := run.New()
 
-	apiHandler := api.NewHandler(reg, pool, definitionStore, temporalClient, streams, sessions, keyStore)
+	apiHandler := api.NewHandler(reg, pool, definitionStore, temporalClient, streams, sessions, keyStore, runs)
 	apiHandler.RegisterRoutes(mux)
 
 	var handler http.Handler = mux

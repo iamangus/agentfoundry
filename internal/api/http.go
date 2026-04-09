@@ -17,6 +17,7 @@ import (
 	"github.com/angoo/agentfoundry/internal/llm"
 	"github.com/angoo/agentfoundry/internal/mcpclient"
 	"github.com/angoo/agentfoundry/internal/registry"
+	"github.com/angoo/agentfoundry/internal/run"
 	"github.com/angoo/agentfoundry/internal/session"
 	"github.com/angoo/agentfoundry/internal/stream"
 	"github.com/angoo/agentfoundry/internal/temporal"
@@ -53,9 +54,10 @@ type Handler struct {
 	streams  *stream.Manager
 	sessions *session.Store
 	keyStore *auth.APIKeyStore
+	runs     *run.Store
 }
 
-func NewHandler(reg *registry.Registry, pool *mcpclient.Pool, store DefinitionStore, temporalClient *temporal.Client, streams *stream.Manager, sessions *session.Store, keyStore *auth.APIKeyStore) *Handler {
+func NewHandler(reg *registry.Registry, pool *mcpclient.Pool, store DefinitionStore, temporalClient *temporal.Client, streams *stream.Manager, sessions *session.Store, keyStore *auth.APIKeyStore, runs *run.Store) *Handler {
 	return &Handler{
 		store:    store,
 		reg:      reg,
@@ -64,6 +66,7 @@ func NewHandler(reg *registry.Registry, pool *mcpclient.Pool, store DefinitionSt
 		streams:  streams,
 		sessions: sessions,
 		keyStore: keyStore,
+		runs:     runs,
 	}
 }
 
@@ -78,6 +81,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/agents/{name}", h.updateAgent)
 	mux.HandleFunc("DELETE /api/v1/agents/{name}", h.deleteAgent)
 	mux.HandleFunc("POST /api/v1/agents/{name}/run", h.runAgent)
+	mux.HandleFunc("GET /api/v1/runs/{id}", h.getRunStatus)
+	mux.HandleFunc("POST /api/v1/runs/{id}/cancel", h.cancelRun)
 	mux.HandleFunc("GET /api/v1/tools", h.listTools)
 	mux.HandleFunc("GET /api/v1/status", h.getStatus)
 	mux.HandleFunc("POST /api/internal/mcp/call", h.mcpProxyCall)
@@ -470,7 +475,18 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	workflowID, err := h.temporal.ExecuteWorkflow(r.Context(), temporal.RunAgentParams{
+	var ephemeralNames []string
+	for _, srv := range req.MCPServers {
+		econn, err := mcpclient.ConnectEphemeral(r.Context(), srv)
+		if err != nil {
+			slog.Error("failed to connect ephemeral MCP server", "name", srv.Name, "url", srv.URL, "error", err)
+			continue
+		}
+		h.pool.RegisterEphemeral(econn)
+		ephemeralNames = append(ephemeralNames, srv.Name)
+	}
+
+	workflowID, await, err := h.temporal.StartWorkflow(r.Context(), temporal.RunAgentParams{
 		AgentName:      name,
 		Message:        req.Message,
 		History:        req.History,
@@ -478,12 +494,77 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 		ResponseSchema: req.ResponseSchema,
 	})
 	if err != nil {
+		for _, n := range ephemeralNames {
+			h.pool.UnregisterEphemeral(n)
+		}
 		slog.Error("failed to start temporal workflow", "agent", name, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to start workflow: " + err.Error()})
 		return
 	}
 
-	writeJSON(w, http.StatusAccepted, runAgentResponse{RunID: workflowID})
+	newRun := h.runs.Create(name)
+	h.runs.SetWorkflowID(newRun.ID, workflowID)
+
+	go func() {
+		ctx := context.WithoutCancel(r.Context())
+
+		cleanup := func() {
+			for _, n := range ephemeralNames {
+				h.pool.UnregisterEphemeral(n)
+			}
+			time.AfterFunc(5*time.Minute, func() {
+				h.runs.Delete(newRun.ID)
+			})
+		}
+
+		agentResult, err := await(ctx)
+		if err != nil {
+			slog.Error("agent run failed", "agent", name, "run_id", newRun.ID, "error", err)
+			h.runs.UpdateStatus(newRun.ID, run.StatusFailed, "", err.Error())
+			cleanup()
+			return
+		}
+
+		slog.Info("agent run completed", "agent", name, "run_id", newRun.ID)
+		h.runs.UpdateStatus(newRun.ID, run.StatusCompleted, agentResult.Response, "")
+		cleanup()
+	}()
+
+	writeJSON(w, http.StatusAccepted, runAgentResponse{RunID: newRun.ID})
+}
+
+func (h *Handler) getRunStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	ru, ok := h.runs.Get(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "run not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, ru)
+}
+
+func (h *Handler) cancelRun(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	ru, ok := h.runs.Get(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "run not found"})
+		return
+	}
+
+	if ru.Status != run.StatusRunning {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "run is not running", "status": string(ru.Status)})
+		return
+	}
+
+	if ru.WorkflowID != "" {
+		if err := h.temporal.CancelWorkflow(r.Context(), ru.WorkflowID); err != nil {
+			slog.Error("failed to cancel temporal workflow", "run_id", id, "workflow_id", ru.WorkflowID, "error", err)
+		}
+	}
+
+	h.runs.UpdateStatus(id, run.StatusCanceled, "", "canceled by user")
+	slog.Info("run canceled", "run_id", id)
+	w.WriteHeader(http.StatusOK)
 }
 
 func (h *Handler) getRawAgent(w http.ResponseWriter, r *http.Request) {
