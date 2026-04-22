@@ -411,10 +411,11 @@ func (h *Handler) listTools(w http.ResponseWriter, r *http.Request) {
 	allTools := h.pool.ListAllTools()
 
 	type toolInfo struct {
-		QualifiedName string `json:"qualified_name"`
-		Server        string `json:"server"`
-		Name          string `json:"name"`
-		Description   string `json:"description"`
+		QualifiedName string          `json:"qualified_name"`
+		Server        string          `json:"server"`
+		Name          string          `json:"name"`
+		Description   string          `json:"description"`
+		InputSchema   json.RawMessage `json:"input_schema"`
 	}
 
 	tools := make([]toolInfo, len(allTools))
@@ -424,6 +425,7 @@ func (h *Handler) listTools(w http.ResponseWriter, r *http.Request) {
 			Server:        dt.ServerName,
 			Name:          dt.Tool.Name,
 			Description:   dt.Tool.Description,
+			InputSchema:   dt.InputSchemaJSON(),
 		}
 	}
 
