@@ -79,7 +79,103 @@ curl -s -X POST \
   "$UI_HOST/api/v1/runs/<run_id>/cancel"
 ```
 
-## Complete Example
+### Streaming Responses (SSE)
+
+For real-time token-by-token output, use the chat session + SSE flow:
+
+**1. Create a session:**
+
+```bash
+curl -s -X POST \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"agent_name": "<name>"}' \
+  "$UI_HOST/api/v1/chat/sessions"
+```
+
+Returns the session ID:
+
+```json
+{"id": "...", "agent_name": "...", "messages": [], ...}
+```
+
+**2. Send a message (starts the run):**
+
+```bash
+curl -s -X POST \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Explain quantum computing"}' \
+  "$UI_HOST/api/v1/chat/sessions/<session_id>/messages"
+```
+
+Returns the run ID:
+
+```json
+{"run_id": "..."}
+```
+
+**3. Stream events:**
+
+```bash
+curl -sN -H "Authorization: Bearer $KEY" \
+  "$UI_HOST/api/v1/chat/runs/<run_id>/events"
+```
+
+The SSE stream emits these event types:
+
+- `token` — one token of the response
+- `status` — status updates (e.g. "Thinking...")
+- `done`  — response complete, data contains the full response
+- `error` — run failed, data contains the error
+
+Example output:
+
+```
+event: status
+data: Thinking...
+
+event: token
+data: Quantum
+
+event: token
+data:  computing
+
+event: done
+data: Quantum computing uses qubits...
+```
+
+**Full streaming script:**
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+UI_HOST="${UI_HOST:-https://ui.agentfoundry.example.com}"
+KEY="${API_KEY:?set API_KEY to your afk_... key}"
+AGENT="${1:?usage: $0 <agent-name> <message>}"
+MESSAGE="${2:?usage: $0 <agent-name> <message>}"
+
+# Create session
+session_id=$(curl -sf -X POST \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d "$(jq -nc --arg name "$AGENT" '{agent_name: $name}')" \
+  "$UI_HOST/api/v1/chat/sessions" | jq -r '.id')
+
+# Send message to start run
+run_id=$(curl -sf -X POST \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d "$(jq -nc --arg msg "$MESSAGE" '{message: $msg}')" \
+  "$UI_HOST/api/v1/chat/sessions/$session_id/messages" | jq -r '.run_id')
+
+# Stream events
+curl -sN -H "Authorization: Bearer $KEY" \
+  "$UI_HOST/api/v1/chat/runs/$run_id/events"
+```
+
+## Complete Example (Polling)
 
 ```bash
 #!/usr/bin/env bash
