@@ -46,6 +46,26 @@ Returns `202` with the run ID:
 {"run_id": "1748012100123456789"}
 ```
 
+### Pass Conversation History
+
+Include prior turns to maintain context across runs:
+
+```bash
+curl -s -X POST \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "What did I just ask about?",
+    "history": [
+      {"role": "user", "content": "Explain quantum computing"},
+      {"role": "assistant", "content": "Quantum computing uses qubits..."}
+    ]
+  }' \
+  "$UI_HOST/api/v1/agents/<name>/run"
+```
+
+The `history` field accepts an array of `{role, content}` objects. Valid roles: `user`, `assistant`, `system`, `tool`.
+
 ### Poll for Results
 
 ```bash
