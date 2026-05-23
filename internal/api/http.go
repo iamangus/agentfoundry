@@ -778,9 +778,17 @@ func (h *Handler) postChatMessage(w http.ResponseWriter, r *http.Request) {
 
 		h.streams.PublishStatus(runID, "Thinking...")
 
+		allMsgs := h.sessions.Get(sessionID).Messages
+		var history []llm.Message
+		for i := 0; i < len(allMsgs)-1; i++ {
+			m := allMsgs[i]
+			history = append(history, llm.Message{Role: m.Role, Content: m.Content})
+		}
+
 		agentResult, err := h.temporal.ExecuteWorkflowSync(ctx, temporal.RunAgentParams{
 			AgentName: def.Name,
 			Message:   req.Message,
+			History:   history,
 			StreamID:  runID,
 			LLMConfig: h.llmConfigInput(),
 		})
