@@ -45,6 +45,9 @@ func main() {
 	)
 
 	authCfg := auth.LoadConfig()
+	if authCfg.InternalAPIKey == "" && cfg.InternalAPIKey != "" {
+		authCfg.InternalAPIKey = cfg.InternalAPIKey
+	}
 
 	var (
 		dbPool   *db.Pool

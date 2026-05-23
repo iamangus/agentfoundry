@@ -33,6 +33,7 @@ type LLMConf struct {
 type SystemConfig struct {
 	Listen         string                   `yaml:"listen"`
 	DefinitionsDir string                   `yaml:"definitions_dir"`
+	InternalAPIKey string                   `yaml:"internal_api_key"`
 	S3             S3Config                 `yaml:"s3"`
 	Temporal       TemporalConf             `yaml:"temporal"`
 	LLM            LLMConf                  `yaml:"llm"`
