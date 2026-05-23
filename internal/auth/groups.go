@@ -17,25 +17,27 @@ type groupCacheEntry struct {
 }
 
 type GroupCache struct {
-	issuer        string
-	realm         string
-	adminClientID string
-	adminSecret   string
-	mu            sync.RWMutex
-	cache         map[string]*groupCacheEntry
-	ttl           time.Duration
-	client        *http.Client
+	issuer          string
+	keycloakBaseURL string
+	realm           string
+	adminClientID   string
+	adminSecret     string
+	mu              sync.RWMutex
+	cache           map[string]*groupCacheEntry
+	ttl             time.Duration
+	client          *http.Client
 }
 
-func NewGroupCache(issuer, realm, adminClientID, adminSecret string) *GroupCache {
+func NewGroupCache(issuer, keycloakBaseURL, realm, adminClientID, adminSecret string) *GroupCache {
 	return &GroupCache{
-		issuer:        issuer,
-		realm:         realm,
-		adminClientID: adminClientID,
-		adminSecret:   adminSecret,
-		cache:         make(map[string]*groupCacheEntry),
-		ttl:           60 * time.Second,
-		client:        &http.Client{Timeout: 10 * time.Second},
+		issuer:          issuer,
+		keycloakBaseURL: strings.TrimRight(keycloakBaseURL, "/"),
+		realm:           realm,
+		adminClientID:   adminClientID,
+		adminSecret:     adminSecret,
+		cache:           make(map[string]*groupCacheEntry),
+		ttl:             60 * time.Second,
+		client:          &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
@@ -141,7 +143,7 @@ func (c *GroupCache) fetchUser(ctx context.Context, subject string) ([]string, [
 		return nil, nil, fmt.Errorf("exchange admin token: %w", err)
 	}
 
-	url := c.issuer + "/admin/realms/" + c.realm + "/users/" + subject
+	url := c.keycloakBaseURL + "/admin/realms/" + c.realm + "/users/" + subject
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, nil, err

@@ -63,6 +63,7 @@ func main() {
 		if authCfg.KeycloakAdmin.ClientID != "" && authCfg.KeycloakAdmin.ClientSecret != "" {
 			groups = auth.NewGroupCache(
 				authCfg.Issuer,
+				authCfg.KeycloakURL,
 				authCfg.KeycloakRealm,
 				authCfg.KeycloakAdmin.ClientID,
 				authCfg.KeycloakAdmin.ClientSecret,
