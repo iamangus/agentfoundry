@@ -35,3 +35,4 @@ Thumbs.db
 
 # Agent run logs (generated at runtime, replaced on each startup)
 logs/
+definitions/
