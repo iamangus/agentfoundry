@@ -148,7 +148,9 @@ func (p *Pool) connectOne(ctx context.Context, srv ServerConfig) error {
 	}
 
 	// Initialize the MCP session.
-	_, err = c.Initialize(ctx, mcp.InitializeRequest{
+	initCtx, initCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer initCancel()
+	_, err = c.Initialize(initCtx, mcp.InitializeRequest{
 		Params: mcp.InitializeParams{
 			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
 			ClientInfo: mcp.Implementation{
@@ -164,7 +166,9 @@ func (p *Pool) connectOne(ctx context.Context, srv ServerConfig) error {
 	}
 
 	// Discover tools.
-	toolsResult, err := c.ListTools(ctx, mcp.ListToolsRequest{})
+	toolsCtx, toolsCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer toolsCancel()
+	toolsResult, err := c.ListTools(toolsCtx, mcp.ListToolsRequest{})
 	if err != nil {
 		c.Close()
 		return fmt.Errorf("list tools from %s: %w", srv.Name, err)

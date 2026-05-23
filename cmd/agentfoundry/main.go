@@ -40,7 +40,6 @@ func main() {
 	slog.Info("loaded system config",
 		"listen", cfg.Listen,
 		"definitions_dir", cfg.DefinitionsDir,
-		"mcp_servers", len(cfg.MCPServers),
 		"temporal_host", cfg.Temporal.HostPort,
 	)
 
@@ -155,13 +154,6 @@ func main() {
 	pool := mcpclient.NewPool()
 
 	ctx := context.Background()
-	if len(cfg.MCPServers) > 0 {
-		if err := pool.Connect(ctx, cfg.MCPServers); err != nil {
-			slog.Error("failed to connect to MCP servers", "error", err)
-		}
-	} else {
-		slog.Info("no external MCP servers configured")
-	}
 
 	if mcpStore != nil {
 		dynamicServers, err := mcpStore.ListAll(ctx)

@@ -4,7 +4,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/angoo/agentfoundry/internal/mcpclient"
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,8 +35,7 @@ type SystemConfig struct {
 	InternalAPIKey string                   `yaml:"internal_api_key"`
 	S3             S3Config                 `yaml:"s3"`
 	Temporal       TemporalConf             `yaml:"temporal"`
-	LLM            LLMConf                  `yaml:"llm"`
-	MCPServers     []mcpclient.ServerConfig `yaml:"mcp_servers"`
+	LLM            LLMConf     `yaml:"llm"`
 }
 
 func DefaultSystem() *SystemConfig {
@@ -95,12 +93,6 @@ func LoadSystem(path string) (*SystemConfig, error) {
 
 	for k, v := range cfg.LLM.Headers {
 		cfg.LLM.Headers[k] = expandEnvVar(v)
-	}
-
-	for i := range cfg.MCPServers {
-		for k, v := range cfg.MCPServers[i].Headers {
-			cfg.MCPServers[i].Headers[k] = expandEnvVar(v)
-		}
 	}
 
 	if os.Getenv("S3_ENABLE") == "true" {
