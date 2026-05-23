@@ -22,11 +22,20 @@ type S3Config struct {
 	Enable   bool   `yaml:"enable"`
 }
 
+type LLMConf struct {
+	BaseURL          string            `yaml:"base_url"`
+	APIKey           string            `yaml:"api_key"`
+	DefaultModel     string            `yaml:"default_model"`
+	Headers          map[string]string `yaml:"headers"`
+	SchemaValidation bool              `yaml:"schema_validation"`
+}
+
 type SystemConfig struct {
 	Listen         string                   `yaml:"listen"`
 	DefinitionsDir string                   `yaml:"definitions_dir"`
 	S3             S3Config                 `yaml:"s3"`
 	Temporal       TemporalConf             `yaml:"temporal"`
+	LLM            LLMConf                  `yaml:"llm"`
 	MCPServers     []mcpclient.ServerConfig `yaml:"mcp_servers"`
 }
 
@@ -65,6 +74,27 @@ func LoadSystem(path string) (*SystemConfig, error) {
 		cfg.Temporal.APIKey = os.Getenv("TEMPORAL_API_KEY")
 	}
 	cfg.Temporal.APIKey = expandEnvVar(cfg.Temporal.APIKey)
+
+	cfg.LLM.BaseURL = expandEnvVar(cfg.LLM.BaseURL)
+	cfg.LLM.DefaultModel = expandEnvVar(cfg.LLM.DefaultModel)
+	cfg.LLM.APIKey = expandEnvVar(cfg.LLM.APIKey)
+
+	if cfg.LLM.BaseURL == "" {
+		cfg.LLM.BaseURL = os.Getenv("LLM_BASE_URL")
+	}
+	if cfg.LLM.DefaultModel == "" {
+		cfg.LLM.DefaultModel = os.Getenv("LLM_DEFAULT_MODEL")
+	}
+	if cfg.LLM.APIKey == "" {
+		cfg.LLM.APIKey = os.Getenv("LLM_API_KEY")
+	}
+	if cfg.LLM.APIKey == "" {
+		cfg.LLM.APIKey = os.Getenv("OPENROUTER_API_KEY")
+	}
+
+	for k, v := range cfg.LLM.Headers {
+		cfg.LLM.Headers[k] = expandEnvVar(v)
+	}
 
 	for i := range cfg.MCPServers {
 		for k, v := range cfg.MCPServers[i].Headers {

@@ -18,6 +18,14 @@ const (
 	WorkflowType = "RunAgentWorkflow"
 )
 
+type LLMConfigInput struct {
+	BaseURL          string            `json:"base_url,omitempty"`
+	APIKey           string            `json:"api_key,omitempty"`
+	DefaultModel     string            `json:"default_model,omitempty"`
+	Headers          map[string]string `json:"headers,omitempty"`
+	SchemaValidation bool              `json:"schema_validation"`
+}
+
 type RunAgentParams struct {
 	AgentName      string                   `json:"agent_name"`
 	Message        string                   `json:"message"`
@@ -25,6 +33,7 @@ type RunAgentParams struct {
 	MCPServers     []mcpclient.ServerConfig `json:"mcp_servers,omitempty"`
 	ResponseSchema *config.StructuredOutput `json:"response_schema,omitempty"`
 	StreamID       string                   `json:"stream_id,omitempty"`
+	LLMConfig      *LLMConfigInput          `json:"llm_config,omitempty"`
 }
 
 type RunAgentResult struct {

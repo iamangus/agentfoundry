@@ -47,26 +47,28 @@ type AgentVersion struct {
 }
 
 type Handler struct {
-	store    DefinitionStore
-	reg      *registry.Registry
-	pool     *mcpclient.Pool
-	temporal *temporal.Client
-	streams  *stream.Manager
-	sessions *session.Store
-	keyStore *auth.APIKeyStore
-	runs     *run.Store
+	store     DefinitionStore
+	reg       *registry.Registry
+	pool      *mcpclient.Pool
+	temporal  *temporal.Client
+	streams   *stream.Manager
+	sessions  *session.Store
+	keyStore  *auth.APIKeyStore
+	runs      *run.Store
+	llmConfig *config.LLMConf
 }
 
-func NewHandler(reg *registry.Registry, pool *mcpclient.Pool, store DefinitionStore, temporalClient *temporal.Client, streams *stream.Manager, sessions *session.Store, keyStore *auth.APIKeyStore, runs *run.Store) *Handler {
+func NewHandler(reg *registry.Registry, pool *mcpclient.Pool, store DefinitionStore, temporalClient *temporal.Client, streams *stream.Manager, sessions *session.Store, keyStore *auth.APIKeyStore, runs *run.Store, llmConfig *config.LLMConf) *Handler {
 	return &Handler{
-		store:    store,
-		reg:      reg,
-		pool:     pool,
-		temporal: temporalClient,
-		streams:  streams,
-		sessions: sessions,
-		keyStore: keyStore,
-		runs:     runs,
+		store:     store,
+		reg:       reg,
+		pool:      pool,
+		temporal:  temporalClient,
+		streams:   streams,
+		sessions:  sessions,
+		keyStore:  keyStore,
+		runs:      runs,
+		llmConfig: llmConfig,
 	}
 }
 
@@ -494,6 +496,7 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 		History:        req.History,
 		MCPServers:     req.MCPServers,
 		ResponseSchema: req.ResponseSchema,
+		LLMConfig:      h.llmConfigInput(),
 	})
 	if err != nil {
 		for _, n := range ephemeralNames {
@@ -579,6 +582,19 @@ func (h *Handler) getRawAgent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write(data)
+}
+
+func (h *Handler) llmConfigInput() *temporal.LLMConfigInput {
+	if h.llmConfig == nil {
+		return nil
+	}
+	return &temporal.LLMConfigInput{
+		BaseURL:          h.llmConfig.BaseURL,
+		APIKey:           h.llmConfig.APIKey,
+		DefaultModel:     h.llmConfig.DefaultModel,
+		Headers:          h.llmConfig.Headers,
+		SchemaValidation: h.llmConfig.SchemaValidation,
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {
@@ -752,6 +768,7 @@ func (h *Handler) postChatMessage(w http.ResponseWriter, r *http.Request) {
 			AgentName: def.Name,
 			Message:   req.Message,
 			StreamID:  runID,
+			LLMConfig: h.llmConfigInput(),
 		})
 		if err != nil {
 			slog.Error("agent run failed", "agent", sess.AgentName, "error", err)

@@ -182,7 +182,7 @@ func main() {
 	sessions := session.New()
 	runs := run.New()
 
-	apiHandler := api.NewHandler(reg, pool, definitionStore, temporalClient, streams, sessions, keyStore, runs)
+	apiHandler := api.NewHandler(reg, pool, definitionStore, temporalClient, streams, sessions, keyStore, runs, &cfg.LLM)
 	apiHandler.RegisterRoutes(mux)
 
 	var handler http.Handler = mux
