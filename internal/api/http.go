@@ -255,6 +255,10 @@ func (h *Handler) updateAgent(w http.ResponseWriter, r *http.Request) {
 	case config.ScopeUser, "":
 	}
 
+	if def.Scope == "" {
+		def.Scope = string(config.ScopeUser)
+	}
+
 	if existing.Scope == string(config.ScopeTeam) && def.Scope != string(config.ScopeTeam) {
 		if existing.CreatedBy != ac.Subject && !ac.IsGlobalAdmin {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "only the creator can change a team agent to personal"})
