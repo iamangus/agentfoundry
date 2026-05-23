@@ -102,7 +102,7 @@ func (s *APIKeyStore) Validate(ctx context.Context, fullKey string) (*APIKeyReco
 
 func (s *APIKeyStore) List(ctx context.Context, ownerSubject string) ([]APIKeyRecord, error) {
 	rows, err := s.db.Query(ctx,
-		`SELECT id, name, key_prefix, created_at, last_used_at, expires_at, revoked_at FROM api_keys WHERE owner_subject = $1 ORDER BY created_at DESC`,
+		`SELECT id, name, key_prefix, created_at, last_used_at, expires_at, revoked_at FROM api_keys WHERE owner_subject = $1 AND revoked_at IS NULL ORDER BY created_at DESC`,
 		ownerSubject,
 	)
 	if err != nil {
