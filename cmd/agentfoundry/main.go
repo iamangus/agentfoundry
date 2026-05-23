@@ -54,6 +54,7 @@ func main() {
 		jwt      *auth.JWTValidator
 		groups   *auth.GroupCache
 		keyStore *auth.APIKeyStore
+		mcpStore *auth.MCPServerStore
 		authMW   *auth.Middleware
 	)
 
@@ -98,6 +99,7 @@ func main() {
 
 		if dbPool != nil {
 			keyStore = auth.NewAPIKeyStore(dbPool.Pool)
+			mcpStore = auth.NewMCPServerStore(dbPool.Pool)
 		}
 
 		authMW = auth.NewMiddleware(jwt, keyStore, groups, authCfg)
@@ -186,7 +188,7 @@ func main() {
 	sessions := session.New()
 	runs := run.New()
 
-	apiHandler := api.NewHandler(reg, pool, definitionStore, temporalClient, streams, sessions, keyStore, runs, &cfg.LLM)
+	apiHandler := api.NewHandler(reg, pool, definitionStore, temporalClient, streams, sessions, keyStore, mcpStore, runs, &cfg.LLM)
 	apiHandler.RegisterRoutes(mux)
 
 	var handler http.Handler = mux

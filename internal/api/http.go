@@ -54,11 +54,12 @@ type Handler struct {
 	streams   *stream.Manager
 	sessions  *session.Store
 	keyStore  *auth.APIKeyStore
+	mcpStore  *auth.MCPServerStore
 	runs      *run.Store
 	llmConfig *config.LLMConf
 }
 
-func NewHandler(reg *registry.Registry, pool *mcpclient.Pool, store DefinitionStore, temporalClient *temporal.Client, streams *stream.Manager, sessions *session.Store, keyStore *auth.APIKeyStore, runs *run.Store, llmConfig *config.LLMConf) *Handler {
+func NewHandler(reg *registry.Registry, pool *mcpclient.Pool, store DefinitionStore, temporalClient *temporal.Client, streams *stream.Manager, sessions *session.Store, keyStore *auth.APIKeyStore, mcpStore *auth.MCPServerStore, runs *run.Store, llmConfig *config.LLMConf) *Handler {
 	return &Handler{
 		store:     store,
 		reg:       reg,
@@ -67,6 +68,7 @@ func NewHandler(reg *registry.Registry, pool *mcpclient.Pool, store DefinitionSt
 		streams:   streams,
 		sessions:  sessions,
 		keyStore:  keyStore,
+		mcpStore:  mcpStore,
 		runs:      runs,
 		llmConfig: llmConfig,
 	}
@@ -100,6 +102,14 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/api-keys", h.createAPIKey)
 	mux.HandleFunc("GET /api/v1/api-keys", h.listAPIKeys)
 	mux.HandleFunc("DELETE /api/v1/api-keys/{id}", h.revokeAPIKey)
+
+	mux.HandleFunc("POST /api/v1/mcp-servers", h.registerMCPServer)
+	mux.HandleFunc("GET /api/v1/mcp-servers", h.listMCPServers)
+	mux.HandleFunc("GET /api/v1/mcp-servers/{name}", h.getMCPServer)
+	mux.HandleFunc("PUT /api/v1/mcp-servers/{name}", h.updateMCPServer)
+	mux.HandleFunc("DELETE /api/v1/mcp-servers/{name}", h.deleteMCPServer)
+	mux.HandleFunc("PUT /api/v1/mcp-servers/{name}/tools/{tool}", h.setToolScope)
+	mux.HandleFunc("POST /api/v1/mcp-servers/{name}/refresh", h.refreshMCPServer)
 
 	slog.Info("API routes registered", "prefix", "/api/v1")
 }

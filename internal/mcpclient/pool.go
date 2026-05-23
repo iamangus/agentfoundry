@@ -481,6 +481,55 @@ func (p *Pool) UnregisterEphemeral(name string) {
 	slog.Info("unregistered ephemeral MCP server from pool", "name", name)
 }
 
+// ConnectDynamic connects to an MCP server at runtime and adds it to the pool.
+// Returns an error if the connection fails.
+func (p *Pool) ConnectDynamic(ctx context.Context, srv ServerConfig) error {
+	return p.connectOne(ctx, srv)
+}
+
+// DisconnectDynamic removes an MCP server from the pool by name and closes its
+// connection. If the server is not in the pool this is a no-op.
+func (p *Pool) DisconnectDynamic(name string) {
+	p.mu.Lock()
+	conn, ok := p.conns[name]
+	if !ok {
+		p.mu.Unlock()
+		return
+	}
+	delete(p.conns, name)
+	p.mu.Unlock()
+
+	conn.client.Close()
+	slog.Info("disconnected dynamic MCP server", "name", name)
+}
+
+// ServerStatus describes whether a server is connected and what tools it has.
+type ServerStatus struct {
+	Connected bool
+	Tools     []mcp.Tool
+}
+
+// GetServerStatus returns the connection status and discovered tools for a
+// server by name. Checks persistent connections only (not ephemeral).
+func (p *Pool) GetServerStatus(name string) ServerStatus {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	conn, ok := p.conns[name]
+	if !ok {
+		return ServerStatus{}
+	}
+
+	tools := make([]mcp.Tool, len(conn.tools))
+	copy(tools, conn.tools)
+	return ServerStatus{Connected: true, Tools: tools}
+}
+
+// RefreshServer re-discovers tools from a specific server by name.
+func (p *Pool) RefreshServer(name string) {
+	p.refreshTools(name)
+}
+
 // Close shuts down all MCP client connections.
 func (p *Pool) Close() {
 	p.mu.Lock()

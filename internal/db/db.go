@@ -56,6 +56,29 @@ func (p *Pool) Migrate(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys (owner_subject) WHERE revoked_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys (key_hash)`,
+
+		`CREATE TABLE IF NOT EXISTS mcp_servers (
+			id          TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+			name        TEXT NOT NULL UNIQUE,
+			url         TEXT NOT NULL,
+			transport   TEXT NOT NULL DEFAULT 'sse',
+			headers     JSONB DEFAULT '{}',
+			scope       TEXT NOT NULL DEFAULT 'user',
+			team        TEXT,
+			created_by  TEXT NOT NULL,
+			created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_mcp_servers_scope ON mcp_servers (scope, team)`,
+
+		`CREATE TABLE IF NOT EXISTS mcp_tool_scopes (
+			server_id   TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+			tool_name   TEXT NOT NULL,
+			scope       TEXT NOT NULL,
+			team        TEXT,
+			created_by  TEXT NOT NULL,
+			PRIMARY KEY (server_id, tool_name)
+		)`,
 	}
 
 	for _, m := range migrations {
