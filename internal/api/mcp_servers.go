@@ -428,7 +428,7 @@ func toMCPServerResponse(rec auth.MCPServerRecord, pool *mcpclient.Pool, store *
 
 	status := pool.GetServerStatus(rec.Name)
 
-	var tools []toolInfo
+	tools := make([]toolInfo, 0)
 	for _, t := range status.Tools {
 		scope := rec.Scope
 		scopeSource := "server"
