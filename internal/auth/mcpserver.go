@@ -130,6 +130,38 @@ func (s *MCPServerStore) List(ctx context.Context, subject string, teams []strin
 	return results, nil
 }
 
+func (s *MCPServerStore) ListAll(ctx context.Context) ([]MCPServerRecord, error) {
+	rows, err := s.db.Query(ctx,
+		`SELECT id, name, url, transport, headers, scope, team, created_by, created_at, updated_at FROM mcp_servers ORDER BY name ASC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list all mcp servers: %w", err)
+	}
+	defer rows.Close()
+
+	var results []MCPServerRecord
+	for rows.Next() {
+		var rec MCPServerRecord
+		var headersJSON []byte
+		var team *string
+
+		if err := rows.Scan(&rec.ID, &rec.Name, &rec.URL, &rec.Transport, &headersJSON, &rec.Scope, &team, &rec.CreatedBy, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan mcp server: %w", err)
+		}
+
+		if team != nil {
+			rec.Team = *team
+		}
+		_ = json.Unmarshal(headersJSON, &rec.Headers)
+		if rec.Headers == nil {
+			rec.Headers = map[string]string{}
+		}
+		results = append(results, rec)
+	}
+
+	return results, nil
+}
+
 func visibleTo(scope, team, createdBy, subject string, teams []string, isGlobalAdmin bool) bool {
 	switch scope {
 	case "global":

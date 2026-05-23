@@ -163,6 +163,25 @@ func main() {
 		slog.Info("no external MCP servers configured")
 	}
 
+	if mcpStore != nil {
+		dynamicServers, err := mcpStore.ListAll(ctx)
+		if err != nil {
+			slog.Error("failed to load dynamic MCP servers from database", "error", err)
+		} else {
+			for _, srv := range dynamicServers {
+				cfg := mcpclient.ServerConfig{
+					Name:      srv.Name,
+					URL:       srv.URL,
+					Transport: srv.Transport,
+					Headers:   srv.Headers,
+				}
+				if err := pool.ConnectDynamic(ctx, cfg); err != nil {
+					slog.Error("failed to reconnect dynamic MCP server", "name", srv.Name, "error", err)
+				}
+			}
+		}
+	}
+
 	temporalClient, err := temporal.NewClient(cfg.Temporal.HostPort, cfg.Temporal.Namespace, cfg.Temporal.APIKey)
 	if err != nil {
 		slog.Error("failed to connect to temporal server", "error", err)
