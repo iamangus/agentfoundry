@@ -111,6 +111,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/mcp-servers/{name}/tools/{tool}", h.setToolScope)
 	mux.HandleFunc("POST /api/v1/mcp-servers/{name}/refresh", h.refreshMCPServer)
 
+	mux.HandleFunc("GET /api/v1/teams", h.listTeams)
+
 	slog.Info("API routes registered", "prefix", "/api/v1")
 }
 
@@ -1021,4 +1023,13 @@ func (h *Handler) revokeAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+}
+
+func (h *Handler) listTeams(w http.ResponseWriter, r *http.Request) {
+	ac := auth.FromContext(r)
+	if ac == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"teams": ac.Teams})
 }
