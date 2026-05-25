@@ -225,6 +225,7 @@ func (s *DBStore) GetDefinition(name string) *config.Definition {
 		Scope:              row.Scope,
 		Team:               row.Team,
 		CreatedBy:          row.CreatedBy,
+		ProviderID:         row.ProviderID,
 	}
 
 	if len(row.Tools) > 0 {
@@ -307,7 +308,7 @@ func (s *DBStore) ListDefinitions() []*config.Definition {
 
 	ctx := context.Background()
 	rows, err := s.pool.Query(ctx, `SELECT agent_id, name, kind, description, model, system_prompt, tools,
-		max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by
+		max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id
 		FROM agent_definitions ORDER BY name`)
 	if err != nil {
 		slog.Error("failed to list agent definitions", "error", err)
@@ -331,10 +332,11 @@ func (s *DBStore) ListDefinitions() []*config.Definition {
 			Scope              string
 			Team               string
 			CreatedBy          string
+			ProviderID         string
 		}
 		if err := rows.Scan(&row.AgentID, &row.Name, &row.Kind, &row.Description, &row.Model,
 			&row.SystemPrompt, &row.Tools, &row.MaxTurns, &row.MaxConcurrentTools, &row.ForceJSON,
-			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy); err != nil {
+			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID); err != nil {
 			slog.Error("failed to scan agent definition row", "error", err)
 			continue
 		}
@@ -352,6 +354,7 @@ func (s *DBStore) ListDefinitions() []*config.Definition {
 			Scope:              row.Scope,
 			Team:               row.Team,
 			CreatedBy:          row.CreatedBy,
+			ProviderID:         row.ProviderID,
 		}
 
 		if len(row.Tools) > 0 {
