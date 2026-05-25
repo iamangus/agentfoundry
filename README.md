@@ -114,15 +114,15 @@ team: engineering     # required when scope is "team"
 | `POST` | `/api/v1/agents` | Create agent (scope: `user` by default, `team`/`global` require roles) |
 | `PUT` | `/api/v1/agents/{name}` | Update agent (permission-checked) |
 | `DELETE` | `/api/v1/agents/{name}` | Delete agent (permission-checked) |
-| `POST` | `/api/v1/agents/{name}/run` | Run an agent |
+| `POST` | `/api/v1/agents/{id}/run` | Run an agent by AgentID (32-char hex, not the name). Use `GET /api/v1/agents` to find an agent's ID. |
 
-#### Versioning (S3 storage only)
+#### Versioning
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/v1/agents/{name}/versions` | List version history |
 | `GET` | `/api/v1/agents/{name}/version?version_id=xyz` | View a specific version |
-| `POST` | `/api/v1/agents/{name}/rollback?version_id=xyz` | Restore a previous version (owner-only) |
+| `POST` | `/api/v1/agents/{name}/rollback?version_id=xyz` | Restore a previous version (owner-only). Creates a new save, doesn't overwrite.
 
 ### Chat Sessions
 
@@ -161,8 +161,10 @@ All MCP servers use the Streamable HTTP transport (POST/GET/DELETE on a single e
 
 ### Running an Agent
 
+> Runs use the AgentID, not the name. Find the AgentID via `GET /api/v1/agents` or on the agent card in the UI.
+
 ```bash
-curl -s -X POST http://localhost:3000/api/v1/agents/researcher/run \
+curl -s -X POST http://localhost:3000/api/v1/agents/<agent-id>/run \
   -H "Content-Type: application/json" \
   -d '{"message": "What is the MCP protocol?"}' | jq
 ```

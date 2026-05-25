@@ -23,12 +23,18 @@ Authorization: Bearer afk_<key>
 Replace `$UI_HOST` with your agentfoundry-ui hostname and `$KEY` with your
 `afk_...` key.
 
+> **Agent IDs vs Names:** Agent runs use the **AgentID** (a 32-character hex
+> string shown on each agent card in the UI). List/Create/Update/Delete
+> endpoints use the human-readable **name**. Run the list endpoint to find both.
+
 ### List Agents
 
 ```bash
 curl -s -H "Authorization: Bearer $KEY" \
   "$UI_HOST/api/v1/agents"
 ```
+
+The response includes `agent_id` (for runs) and `name` (for CRUD).
 
 ### Start a Run
 
@@ -37,7 +43,7 @@ curl -s -X POST \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{"message": "Explain quantum computing in one sentence."}' \
-  "$UI_HOST/api/v1/agents/<name>/run"
+  "$UI_HOST/api/v1/agents/<agent-id>/run"
 ```
 
 Returns `202` with the run ID:
@@ -61,7 +67,7 @@ curl -s -X POST \
       {"role": "assistant", "content": "Quantum computing uses qubits..."}
     ]
   }' \
-  "$UI_HOST/api/v1/agents/<name>/run"
+  "$UI_HOST/api/v1/agents/<agent-id>/run"
 ```
 
 The `history` field accepts an array of `{role, content}` objects. Valid roles: `user`, `assistant`, `system`, `tool`.
@@ -203,15 +209,15 @@ set -euo pipefail
 
 UI_HOST="${UI_HOST:-https://ui.agentfoundry.example.com}"
 KEY="${API_KEY:?set API_KEY to your afk_... key}"
-AGENT="${1:?usage: $0 <agent-name> <message>}"
-MESSAGE="${2:?usage: $0 <agent-name> <message>}"
+AGENT_ID="${1:?usage: $0 <agent-id> <message>}"
+MESSAGE="${2:?usage: $0 <agent-id> <message>}"
 
-# Start the run
+# Start the run (uses AgentID — find it with the list endpoint or on the agent card in the UI)
 run_id=$(curl -sf -X POST \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d "$(jq -nc --arg msg "$MESSAGE" '{message: $msg}')" \
-  "$UI_HOST/api/v1/agents/$AGENT/run" | jq -r '.run_id')
+  "$UI_HOST/api/v1/agents/$AGENT_ID/run" | jq -r '.run_id')
 
 echo "Run started: $run_id"
 
@@ -241,5 +247,5 @@ Save as `run-agent.sh`, then:
 
 ```bash
 chmod +x run-agent.sh
-API_KEY=afk_... ./run-agent.sh my-agent "Tell me a joke"
+API_KEY=afk_... ./run-agent.sh a1b2c3d4e5f67890abcdef1234567890 "Tell me a joke"
 ```
