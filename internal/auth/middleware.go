@@ -26,13 +26,12 @@ func NewMiddleware(jwt *JWTValidator, keyStore *APIKeyStore, groups *GroupCache,
 func (m *Middleware) Handler(exemptPaths ...string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			for _, p := range exemptPaths {
-				if r.URL.Path == p {
-					next.ServeHTTP(w, r)
-					return
-				}
+		for _, p := range exemptPaths {
+			if strings.HasPrefix(r.URL.Path, p) {
+				next.ServeHTTP(w, r)
+				return
 			}
-
+		}
 			if !m.config.Enabled() {
 				ctx := NewContext(r.Context(), &AuthContext{
 					Subject:       "anonymous",

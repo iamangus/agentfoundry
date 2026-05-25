@@ -58,6 +58,8 @@ temporal:
 
 All auth configuration is via environment variables (see [Authentication & Authorization](#authentication--authorization)).
 
+The `internal_api_key` can also be set via the `WORKER_API_KEY` or `ORCHESTRATOR_API_KEY` environment variable (both checked). The YAML value acts as a fallback. This key must match the worker's `orchestrator.api_key`. The worker sends this key as `Authorization: Bearer &lt;key&gt;` in LLM proxy calls.
+
 ### Agent Definition
 
 Agents are created and managed through the UI or API. Each agent is stored in PostgreSQL with automatic versioning on every save.
@@ -242,7 +244,7 @@ Auth is **disabled by default**. Set `AUTH_ISSUER` to enable it. When enabled, a
 | `KEYCLOAK_ADMIN_CLIENT_ID` | Confidential client with `view-users` and `query-users` roles |
 | `KEYCLOAK_ADMIN_CLIENT_SECRET` | Secret for the admin client |
 
-#### Postgres (for API key storage)
+#### Postgres (for agent definitions and auth storage)
 
 | Variable | Description |
 |----------|-------------|

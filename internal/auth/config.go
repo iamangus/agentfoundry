@@ -62,8 +62,17 @@ func LoadConfig() *Config {
 			ClientID:     os.Getenv("KEYCLOAK_ADMIN_CLIENT_ID"),
 			ClientSecret: os.Getenv("KEYCLOAK_ADMIN_CLIENT_SECRET"),
 		},
-		InternalAPIKey: os.Getenv("WORKER_API_KEY"),
+		InternalAPIKey: coalesceOS("WORKER_API_KEY", "ORCHESTRATOR_API_KEY"),
 	}
+}
+
+func coalesceOS(vars ...string) string {
+	for _, name := range vars {
+		if v := os.Getenv(name); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func (c *Config) Enabled() bool {

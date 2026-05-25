@@ -159,7 +159,7 @@ func main() {
 
 	providerStore := store.NewProviderStore(dbPool.Pool)
 
-	apiHandler := api.NewHandler(reg, pool, definitionStore, temporalClient, streams, sessions, keyStore, mcpStore, runs, providerStore, cfg.InternalAPIKey)
+	apiHandler := api.NewHandler(reg, pool, definitionStore, temporalClient, streams, sessions, keyStore, mcpStore, runs, providerStore, authCfg.InternalAPIKey)
 	apiHandler.RegisterRoutes(mux)
 
 	var handler http.Handler = mux
