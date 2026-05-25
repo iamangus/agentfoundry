@@ -111,7 +111,13 @@ func (s *DBStore) SaveDefinition(def *config.Definition) error {
 	ctx := context.Background()
 
 	if def.AgentID == "" {
-		def.AgentID = generateAgentID()
+		var existingID string
+		if err := s.pool.QueryRow(context.Background(),
+			`SELECT agent_id FROM agent_definitions WHERE name = $1`, def.Name).Scan(&existingID); err == nil {
+			def.AgentID = existingID
+		} else {
+			def.AgentID = generateAgentID()
+		}
 	}
 
 	toolsJSON, err := json.Marshal(def.Tools)

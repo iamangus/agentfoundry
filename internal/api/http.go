@@ -263,6 +263,7 @@ func (h *Handler) updateAgent(w http.ResponseWriter, r *http.Request) {
 
 	def.Kind = config.KindAgent
 	def.CreatedBy = existing.CreatedBy
+	def.AgentID = existing.AgentID
 
 	switch config.Scope(def.Scope) {
 	case config.ScopeGlobal:
