@@ -15,6 +15,7 @@ type Message struct {
 
 type Session struct {
 	ID          string    `json:"id"`
+	AgentID     string    `json:"agent_id"`
 	AgentName   string    `json:"agent_name"`
 	Messages    []Message `json:"messages"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -31,10 +32,11 @@ func New() *Store {
 	return &Store{sessions: make(map[string]*Session)}
 }
 
-func (s *Store) Create(agentName string, owner string) *Session {
+func (s *Store) Create(agentID, agentName, owner string) *Session {
 	id := newID()
 	sess := &Session{
 		ID:        id,
+		AgentID:   agentID,
 		AgentName: agentName,
 		Messages:  []Message{},
 		CreatedAt: time.Now(),

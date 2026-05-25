@@ -654,7 +654,7 @@ func extractMCPText(result *mcp.CallToolResult) string {
 // --- Chat session endpoints ---
 
 type createSessionRequest struct {
-	AgentName string `json:"agent_name"`
+	AgentID string `json:"agent_id"`
 }
 
 func (h *Handler) createChatSession(w http.ResponseWriter, r *http.Request) {
@@ -669,12 +669,18 @@ func (h *Handler) createChatSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 		return
 	}
-	if req.AgentName == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_name is required"})
+	if req.AgentID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_id is required"})
 		return
 	}
 
-	sess := h.sessions.Create(req.AgentName, ac.Subject)
+	def := h.store.GetDefinitionByID(req.AgentID)
+	if def == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found: " + req.AgentID})
+		return
+	}
+
+	sess := h.sessions.Create(def.AgentID, def.Name, ac.Subject)
 	writeJSON(w, http.StatusCreated, sess)
 }
 
@@ -739,14 +745,7 @@ func (h *Handler) postChatMessage(w http.ResponseWriter, r *http.Request) {
 	userMsg := session.Message{Role: "user", Content: req.Message, Time: time.Now()}
 	h.sessions.AddMessage(sessionID, userMsg)
 
-	defs := h.store.ListDefinitions()
-	var def *config.Definition
-	for _, d := range defs {
-		if d.Name == sess.AgentName {
-			def = d
-			break
-		}
-	}
+	def := h.store.GetDefinitionByID(sess.AgentID)
 
 	runID := newRunID()
 	h.streams.Create(runID)
@@ -756,7 +755,7 @@ func (h *Handler) postChatMessage(w http.ResponseWriter, r *http.Request) {
 		ctx := context.WithoutCancel(r.Context())
 
 		if def == nil {
-			errMsg := fmt.Sprintf("agent %q not found", sess.AgentName)
+			errMsg := fmt.Sprintf("agent %q not found", sess.AgentID)
 			h.streams.PublishError(runID, errMsg)
 
 			h.sessions.AddMessage(sessionID, session.Message{
@@ -789,7 +788,7 @@ func (h *Handler) postChatMessage(w http.ResponseWriter, r *http.Request) {
 			LLMConfig: h.llmConfigInput(),
 		})
 		if err != nil {
-			slog.Error("agent run failed", "agent", sess.AgentName, "error", err)
+			slog.Error("agent run failed", "agent", sess.AgentID, "error", err)
 
 			h.sessions.AddMessage(sessionID, session.Message{
 				Role:    "assistant",

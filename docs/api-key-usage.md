@@ -115,14 +115,14 @@ For real-time token-by-token output, use the chat session + SSE flow:
 curl -s -X POST \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
-  -d '{"agent_name": "<name>"}' \
+  -d '{"agent_id": "<agent-id>"}' \
   "$UI_HOST/api/v1/chat/sessions"
 ```
 
 Returns the session ID:
 
 ```json
-{"id": "...", "agent_name": "...", "messages": [], ...}
+{"id": "...", "agent_id": "...", "agent_name": "...", "messages": [], ...}
 ```
 
 **2. Send a message (starts the run):**
@@ -179,14 +179,14 @@ set -euo pipefail
 
 UI_HOST="${UI_HOST:-https://ui.agentfoundry.example.com}"
 KEY="${API_KEY:?set API_KEY to your afk_... key}"
-AGENT="${1:?usage: $0 <agent-name> <message>}"
-MESSAGE="${2:?usage: $0 <agent-name> <message>}"
+AGENT_ID="${1:?usage: $0 <agent-id> <message>}"
+MESSAGE="${2:?usage: $0 <agent-id> <message>}"
 
 # Create session
 session_id=$(curl -sf -X POST \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
-  -d "$(jq -nc --arg name "$AGENT" '{agent_name: $name}')" \
+  -d "$(jq -nc --arg id "$AGENT_ID" '{agent_id: $id}')" \
   "$UI_HOST/api/v1/chat/sessions" | jq -r '.id')
 
 # Send message to start run

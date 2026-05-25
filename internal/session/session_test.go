@@ -8,10 +8,13 @@ import (
 
 func TestStore_CreateAndGet(t *testing.T) {
 	s := session.New()
-	sess := s.Create("researcher", "user-1")
+	sess := s.Create("agent-1", "researcher", "user-1")
 
 	if sess.ID == "" {
 		t.Fatal("expected non-empty session ID")
+	}
+	if sess.AgentID != "agent-1" {
+		t.Errorf("got agent ID %q, want %q", sess.AgentID, "agent-1")
 	}
 	if sess.AgentName != "researcher" {
 		t.Errorf("got agent %q, want %q", sess.AgentName, "researcher")
@@ -41,9 +44,9 @@ func TestStore_GetNotFound(t *testing.T) {
 
 func TestStore_ListByOwner(t *testing.T) {
 	s := session.New()
-	s.Create("agent-a", "user-1")
-	s.Create("agent-b", "user-2")
-	s.Create("agent-c", "user-1")
+	s.Create("id-1", "agent-a", "user-1")
+	s.Create("id-2", "agent-b", "user-2")
+	s.Create("id-3", "agent-c", "user-1")
 
 	sessions := s.ListByOwner("user-1")
 	if len(sessions) != 2 {
@@ -63,7 +66,7 @@ func TestStore_ListByOwner(t *testing.T) {
 
 func TestStore_AddMessage(t *testing.T) {
 	s := session.New()
-	sess := s.Create("agent-a", "user-1")
+	sess := s.Create("id-1", "agent-a", "user-1")
 
 	msg := session.Message{Role: "user", Content: "hello", Time: sess.CreatedAt}
 	if err := s.AddMessage(sess.ID, msg); err != nil {
@@ -89,7 +92,7 @@ func TestStore_AddMessageNotFound(t *testing.T) {
 
 func TestStore_SetActiveRunID(t *testing.T) {
 	s := session.New()
-	sess := s.Create("agent-a", "user-1")
+	sess := s.Create("id-1", "agent-a", "user-1")
 
 	if err := s.SetActiveRunID(sess.ID, "run-123"); err != nil {
 		t.Fatalf("SetActiveRunID: %v", err)
@@ -103,7 +106,7 @@ func TestStore_SetActiveRunID(t *testing.T) {
 
 func TestStore_ClearActiveRunID(t *testing.T) {
 	s := session.New()
-	sess := s.Create("agent-a", "user-1")
+	sess := s.Create("id-1", "agent-a", "user-1")
 	s.SetActiveRunID(sess.ID, "run-123")
 	s.ClearActiveRunID(sess.ID)
 
@@ -115,7 +118,7 @@ func TestStore_ClearActiveRunID(t *testing.T) {
 
 func TestStore_FindByRunID(t *testing.T) {
 	s := session.New()
-	sess := s.Create("agent-a", "user-1")
+	sess := s.Create("id-1", "agent-a", "user-1")
 	s.SetActiveRunID(sess.ID, "run-456")
 
 	found := s.FindByRunID("run-456")
@@ -133,7 +136,7 @@ func TestStore_FindByRunID(t *testing.T) {
 
 func TestStore_FindByRunID_AfterClear(t *testing.T) {
 	s := session.New()
-	sess := s.Create("agent-a", "user-1")
+	sess := s.Create("id-1", "agent-a", "user-1")
 	s.SetActiveRunID(sess.ID, "run-789")
 	s.ClearActiveRunID(sess.ID)
 
