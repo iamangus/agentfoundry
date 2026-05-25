@@ -72,6 +72,59 @@ curl -s -X POST \
 
 The `history` field accepts an array of `{role, content}` objects. Valid roles: `user`, `assistant`, `system`, `tool`.
 
+### Ad-Hoc MCP Servers
+
+Per-run MCP servers can be passed inline without registration:
+
+```bash
+curl -s -X POST \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "List my pull requests",
+    "mcp_servers": [
+      {
+        "name": "github",
+        "url": "https://mcp.github.com/sse",
+        "transport": "sse",
+        "headers": {"Authorization": "Bearer <github-token>"}
+      }
+    ]
+  }' \
+  "$UI_HOST/api/v1/agents/<agent-id>/run"
+```
+
+Each server object requires `name` and `url`. Optional fields:
+- `transport` — `"sse"` (default) or `"streamable-http"`
+- `headers` — key-value header map (e.g. auth tokens)
+
+### Structured Output
+
+Force the agent to return JSON matching a specific schema:
+
+```bash
+curl -s -X POST \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Summarize this document",
+    "response_schema": {
+      "name": "summary",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "title": {"type": "string"},
+          "points": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["title", "points"]
+      }
+    }
+  }' \
+  "$UI_HOST/api/v1/agents/<agent-id>/run"
+```
+
+The `name` field is required. The `schema` is a JSON Schema object.
+
 ### Poll for Results
 
 ```bash
