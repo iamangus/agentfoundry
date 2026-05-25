@@ -1,11 +1,39 @@
 package api
 
 import (
+	"bufio"
+	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
+	"time"
 )
+
+type inferenceStreamDelta struct {
+	Role      string  `json:"role,omitempty"`
+	Content   *string `json:"content,omitempty"`
+	ToolCalls []struct {
+		Index    int    `json:"index"`
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	} `json:"tool_calls,omitempty"`
+}
+
+type inferenceStreamChoice struct {
+	Index        int                  `json:"index"`
+	Delta        inferenceStreamDelta `json:"delta"`
+	FinishReason *string              `json:"finish_reason"`
+}
+
+type inferenceStreamChunk struct {
+	ID      string                 `json:"id"`
+	Choices []inferenceStreamChoice `json:"choices"`
+}
 
 func (h *Handler) inferenceProxy(w http.ResponseWriter, r *http.Request) {
 	agentID := r.PathValue("agentID")
@@ -77,22 +105,59 @@ func (h *Handler) inferenceProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(resp.StatusCode)
 
+	logPath := fmt.Sprintf("/data/inference_%s_%d.log", agentID, time.Now().UnixNano())
+	_ = os.MkdirAll("/data", 0755)
+	logFile, logErr := os.Create(logPath)
+	if logErr != nil {
+		slog.Warn("failed to create inference log", "path", logPath, "error", logErr)
+	} else {
+		defer logFile.Close()
+		fmt.Fprintf(logFile, "# agent_id=%s provider=%s model=%s\n", agentID, prov.Name, def.Model)
+	}
+
 	if flusher, ok := w.(http.Flusher); ok {
-		buf := make([]byte, 4096)
-		for {
-			n, err := resp.Body.Read(buf)
-			if n > 0 {
-				if _, werr := w.Write(buf[:n]); werr != nil {
-					return
-				}
-				flusher.Flush()
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := scanner.Text()
+
+			if logFile != nil {
+				logFile.WriteString(line + "\n")
 			}
-			if err != nil {
-				if err != io.EOF {
-					slog.Error("inference proxy read error", "error", err)
+
+			if strings.HasPrefix(line, "data: ") {
+				data := strings.TrimPrefix(line, "data: ")
+				if data != "[DONE]" {
+					var chunk inferenceStreamChunk
+					if err := json.Unmarshal([]byte(data), &chunk); err == nil {
+						for _, choice := range chunk.Choices {
+							if choice.Delta.Content != nil && *choice.Delta.Content != "" {
+								slog.Debug("inference delta", "agent_id", agentID, "token", *choice.Delta.Content)
+								if logFile != nil {
+									fmt.Fprintf(logFile, "# token: %q\n", *choice.Delta.Content)
+								}
+							}
+							for _, tc := range choice.Delta.ToolCalls {
+								slog.Info("inference delta", "agent_id", agentID, "tool_call", tc.Function.Name)
+								if logFile != nil {
+									fmt.Fprintf(logFile, "# tool_call: name=%s args=%q\n", tc.Function.Name, tc.Function.Arguments)
+								}
+							}
+							if choice.FinishReason != nil {
+								slog.Info("inference delta", "agent_id", agentID, "finish", *choice.FinishReason)
+								if logFile != nil {
+									fmt.Fprintf(logFile, "# finish: %s\n", *choice.FinishReason)
+								}
+							}
+						}
+					}
 				}
-				return
 			}
+
+			w.Write([]byte(line + "\n"))
+			flusher.Flush()
+		}
+		if err := scanner.Err(); err != nil {
+			slog.Error("inference proxy read error", "error", err)
 		}
 	} else {
 		io.Copy(w, resp.Body)
