@@ -1,6 +1,6 @@
 # agentfoundry
 
-Backend service for defining, managing, and orchestrating AI agents. Agent definitions are stored as YAML files (locally or in S3 with versioning) and exposed as individual MCP servers for composability. Agent runs are dispatched to [agentfoundry-worker](https://github.com/angoo/agentfoundry-worker) via Temporal workflows. Supports OIDC authentication (Keycloak), role-based access control, team-scoped agents, and personal API keys.
+Backend service for defining, managing, and orchestrating AI agents. Agent definitions are stored in PostgreSQL with automatic versioning on every save. Agents are exposed as individual MCP servers for composability. Agent runs are dispatched to [agentfoundry-worker](https://github.com/angoo/agentfoundry-worker) via Temporal workflows. Inference calls from the worker route through the orchestrator's LLM proxy rather than directly to providers. Supports OIDC authentication (Keycloak), role-based access control, team-scoped agents, personal API keys, and inference provider management.
 
 ## Concepts
 
@@ -12,7 +12,7 @@ Backend service for defining, managing, and orchestrating AI agents. Agent defin
 
 **Composability** — An agent can list another agent in its `tools:` section. When called, the sub-agent runs its own LLM loop and returns a response, enabling multi-agent workflows.
 
-**S3 Versioning** — Agent definitions can be stored in S3 (or any S3-compatible store like RustFS) instead of local files. Every save creates a new version, enabling version history, diffs, and rollback.
+**Versioning** — Every agent save creates a new version in the `agent_versions` table, enabling version history, diffs, and rollback through the API and UI.
 
 ## Quick Start
 
@@ -22,7 +22,7 @@ Backend service for defining, managing, and orchestrating AI agents. Agent defin
 - A running [Temporal](https://temporal.io/) server
 - [agentfoundry-worker](https://github.com/angoo/agentfoundry-worker) running (the worker handles LLM calls)
 - (Optional) Keycloak for OIDC authentication
-- (Optional) S3-compatible storage for versioned agent definitions
+- (Required) PostgreSQL (for agent definitions, API keys, MCP servers, and inference providers)
 
 ### Build and Run
 
@@ -40,7 +40,7 @@ docker run -p 3000:3000 \
   agentfoundry
 ```
 
-The container stores all persistent data under `/data` (definitions and config). Mount a volume or bind-mount there to persist agent definitions and provide your own `agentfoundry.yaml`. The default definitions are baked into the image at `/data/definitions/`.
+The container stores configuration at `/data`. All persistent data (agent definitions, API keys, MCP servers, inference providers) is stored in PostgreSQL.
 
 ## Configuration
 
@@ -48,42 +48,26 @@ The container stores all persistent data under `/data` (definitions and config).
 
 ```yaml
 listen: ":3000"
-definitions_dir: "./definitions"  # local filesystem (default)
-
-# S3 storage with versioning (optional, replaces local filesystem)
-s3:
-  enable: true
-  bucket: "agentfoundry"
-  prefix: "definitions/"
-  endpoint: "https://rustfs.example.com"  # or any S3-compatible endpoint
-  region: "us-east-1"
+internal_api_key: "shared-secret-key"
 
 temporal:
   host_port: "localhost:7233"
   namespace: "default"
   api_key: "${TEMPORAL_API_KEY}"
-
-mcp_servers:
-  - name: "srvd"
-    url: "https://mcp.srvd.dev/mcp"
-    transport: "streamable-http"
-
-  - name: "filesystem"
-    url: "http://localhost:4000/sse"
-    transport: "sse"
 ```
 
 All auth configuration is via environment variables (see [Authentication & Authorization](#authentication--authorization)).
 
 ### Agent Definition
 
-Agent definitions are YAML files. By default they are stored in the `definitions/` directory and hot-reloaded when changed. Alternatively, they can be stored in S3 with automatic versioning (see S3 configuration above).
+Agents are created and managed through the UI or API. Each agent is stored in PostgreSQL with automatic versioning on every save.
 
 ```yaml
 kind: agent
 name: researcher
 description: "Researches topics by searching the web and summarizing findings"
-model: openai/gpt-4o
+model: gpt-4o
+provider_id: "abc123..."       # references a configured inference provider
 system_prompt: |
   You are a research assistant. Search the web for information
   and produce well-organized research briefs.
@@ -142,6 +126,18 @@ team: engineering     # required when scope is "team"
 | `POST` | `/api/v1/api-keys` | Create a personal API key |
 | `GET` | `/api/v1/api-keys` | List your API keys |
 | `DELETE` | `/api/v1/api-keys/{id}` | Revoke an API key |
+
+### Inference Providers
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/v1/providers` | List providers visible to the authenticated user |
+| `POST` | `/api/v1/providers` | Create an inference provider (scope: `user`/`team`/`global`) |
+| `GET` | `/api/v1/providers/{name}` | Get provider details (API key masked) |
+| `PUT` | `/api/v1/providers/{name}` | Update provider |
+| `DELETE` | `/api/v1/providers/{name}` | Delete provider |
+
+Providers are referenced by agents via `provider_id`. When used, the worker's LLM calls route through the orchestrator's inference proxy at `/api/v1/inference/agents/{agentID}/chat/completions`, which injects the provider's credentials server-side.
 
 ### Tools & Status
 
@@ -204,7 +200,7 @@ The client will see only the tools that agent has access to.
 
 ## Authentication & Authorization
 
-Auth is **disabled by default**. Set `AUTH_ISSUER` to enable it. When enabled, all endpoints except `/health` and `/servers/` require a valid `Authorization: Bearer <token>` header.
+Auth is **disabled by default**. Set `AUTH_ISSUER` to enable it. When enabled, all endpoints except `/health`, `/servers/`, and `/api/v1/inference/` require a valid `Authorization: Bearer <token>` header.
 
 ### Authentication Methods
 
@@ -389,16 +385,15 @@ agentfoundry/
 ├── internal/
 │   ├── api/                    # REST API (agents, chat, API keys, versioning)
 │   ├── auth/                   # OIDC JWT validation, API key store, middleware
-│   ├── config/                 # System config, agent definitions, YAML loader
+│   ├── config/                 # System config
 │   ├── db/                     # Postgres pool + auto-migration
 │   ├── mcp/                    # Per-agent Streamable HTTP MCP servers
 │   ├── mcpclient/              # MCP client pool (connects to external servers)
 │   ├── registry/               # In-memory agent definition registry
 │   ├── session/                # In-memory chat session store
-│   ├── store/                  # S3-backed definition store with versioning
+│   ├── store/                  # DB-backed definition store with versioning + provider store
 │   ├── stream/                 # SSE stream manager
 │   └── temporal/               # Temporal workflow client (dispatches to worker)
-├── definitions/                # Agent YAML definitions (filesystem mode)
 ├── agentfoundry.yaml           # System configuration
 ├── Dockerfile
 └── go.mod

@@ -125,7 +125,55 @@ curl -s -X POST \
 
 The `name` field is required. The `schema` is a JSON Schema object.
 
-### Poll for Results
+### Inference Providers
+
+Providers are configured through the agentfoundry-ui web interface (or API). Once created, reference a provider by its ID when creating an agent.
+
+### List Providers
+
+```bash
+curl -s -H "Authorization: Bearer $KEY" \
+  "$UI_HOST/api/v1/providers"
+```
+
+### Create a Provider
+
+```bash
+curl -s -X POST \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "my-openai",
+    "provider_type": "openai",
+    "api_key": "sk-...",
+    "default_model": "gpt-4o"
+  }' \
+  "$UI_HOST/api/v1/providers"
+```
+
+The `provider_type` field accepts: `openai`, `anthropic`, `openrouter`, `ollama`, or `custom`.
+
+API keys are masked in GET/LIST responses. Providers support the same `user`/`team`/`global` scoping model as agents.
+
+### Reference in Agent Create
+
+```bash
+curl -s -X POST \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "kind": "agent",
+    "name": "assistant",
+    "model": "gpt-4o",
+    "provider_id": "<provider-id>",
+    "system_prompt": "You are a helpful assistant."
+  }' \
+  "$UI_HOST/api/v1/agents"
+```
+
+The inference proxy at `/api/v1/inference/agents/{agentID}/chat/completions` handles credential injection server-side — the worker never sees provider API keys.
+
+## Poll for Results
 
 ```bash
 curl -s -H "Authorization: Bearer $KEY" \
