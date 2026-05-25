@@ -13,15 +13,18 @@ import (
 )
 
 type inferenceStreamDelta struct {
-	Role      string  `json:"role,omitempty"`
-	Content   *string `json:"content,omitempty"`
-	ToolCalls []struct {
+	Role             string           `json:"role,omitempty"`
+	Content          *string          `json:"content,omitempty"`
+	Reasoning        *string          `json:"reasoning,omitempty"`
+	ReasoningDetails []json.RawMessage `json:"reasoning_details,omitempty"`
+	ToolCalls        []struct {
 		Index    int    `json:"index"`
 		Function struct {
 			Name      string `json:"name"`
 			Arguments string `json:"arguments"`
 		} `json:"function"`
 	} `json:"tool_calls,omitempty"`
+	Refusal *string `json:"refusal,omitempty"`
 }
 
 type inferenceStreamChoice struct {
@@ -31,8 +34,9 @@ type inferenceStreamChoice struct {
 }
 
 type inferenceStreamChunk struct {
-	ID      string                 `json:"id"`
+	ID      string                  `json:"id"`
 	Choices []inferenceStreamChoice `json:"choices"`
+	Error   *json.RawMessage        `json:"error,omitempty"`
 }
 
 func (h *Handler) inferenceProxy(w http.ResponseWriter, r *http.Request) {
@@ -129,6 +133,12 @@ func (h *Handler) inferenceProxy(w http.ResponseWriter, r *http.Request) {
 				if data != "[DONE]" {
 					var chunk inferenceStreamChunk
 					if err := json.Unmarshal([]byte(data), &chunk); err == nil {
+						if chunk.Error != nil {
+							slog.Error("inference mid-stream error", "agent_id", agentID, "error", string(*chunk.Error))
+							if logFile != nil {
+								fmt.Fprintf(logFile, "# error: %s\n", string(*chunk.Error))
+							}
+						}
 						for _, choice := range chunk.Choices {
 							if choice.Delta.Content != nil && *choice.Delta.Content != "" {
 								slog.Debug("inference delta", "agent_id", agentID, "token", *choice.Delta.Content)
@@ -136,10 +146,27 @@ func (h *Handler) inferenceProxy(w http.ResponseWriter, r *http.Request) {
 									fmt.Fprintf(logFile, "# token: %q\n", *choice.Delta.Content)
 								}
 							}
+							if choice.Delta.Reasoning != nil && *choice.Delta.Reasoning != "" {
+								slog.Debug("inference delta", "agent_id", agentID, "reasoning", *choice.Delta.Reasoning)
+								if logFile != nil {
+									fmt.Fprintf(logFile, "# reasoning: %q\n", *choice.Delta.Reasoning)
+								}
+							}
+							if len(choice.Delta.ReasoningDetails) > 0 {
+								if logFile != nil {
+									fmt.Fprintf(logFile, "# reasoning_details: %d items\n", len(choice.Delta.ReasoningDetails))
+								}
+							}
 							for _, tc := range choice.Delta.ToolCalls {
 								slog.Info("inference delta", "agent_id", agentID, "tool_call", tc.Function.Name)
 								if logFile != nil {
 									fmt.Fprintf(logFile, "# tool_call: name=%s args=%q\n", tc.Function.Name, tc.Function.Arguments)
+								}
+							}
+							if choice.Delta.Refusal != nil && *choice.Delta.Refusal != "" {
+								slog.Warn("inference delta", "agent_id", agentID, "refusal", *choice.Delta.Refusal)
+								if logFile != nil {
+									fmt.Fprintf(logFile, "# refusal: %q\n", *choice.Delta.Refusal)
 								}
 							}
 							if choice.FinishReason != nil {
