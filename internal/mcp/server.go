@@ -171,6 +171,7 @@ func (m *Manager) addAgentAsTool(mcpServer *server.MCPServer, def *config.Defini
 		}
 
 		result, err := tc.ExecuteWorkflowSync(ctx, temporal.RunAgentParams{
+			AgentID:   agentDef.AgentID,
 			AgentName: agentDef.Name,
 			Message:   message,
 		})

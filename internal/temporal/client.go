@@ -27,6 +27,7 @@ type LLMConfigInput struct {
 }
 
 type RunAgentParams struct {
+	AgentID        string                   `json:"agent_id"`
 	AgentName      string                   `json:"agent_name"`
 	Message        string                   `json:"message"`
 	History        []llm.Message            `json:"history,omitempty"`
@@ -69,7 +70,7 @@ func NewClient(hostPort, namespace, apiKey string) (*Client, error) {
 }
 
 func (c *Client) ExecuteWorkflow(ctx context.Context, params RunAgentParams) (string, error) {
-	workflowID := params.AgentName + "-" + randomID()
+	workflowID := params.AgentID + "-" + randomID()
 	workflowOpts := client.StartWorkflowOptions{
 		ID:        workflowID,
 		TaskQueue: TaskQueue,
@@ -85,7 +86,7 @@ func (c *Client) ExecuteWorkflow(ctx context.Context, params RunAgentParams) (st
 }
 
 func (c *Client) ExecuteWorkflowSync(ctx context.Context, params RunAgentParams) (*RunAgentResult, error) {
-	workflowID := params.AgentName + "-" + randomID()
+	workflowID := params.AgentID + "-" + randomID()
 	workflowOpts := client.StartWorkflowOptions{
 		ID:        workflowID,
 		TaskQueue: TaskQueue,
@@ -105,7 +106,7 @@ func (c *Client) ExecuteWorkflowSync(ctx context.Context, params RunAgentParams)
 }
 
 func (c *Client) StartWorkflow(ctx context.Context, params RunAgentParams) (workflowID string, await func(context.Context) (*RunAgentResult, error), err error) {
-	workflowID = params.AgentName + "-" + randomID()
+	workflowID = params.AgentID + "-" + randomID()
 	workflowOpts := client.StartWorkflowOptions{
 		ID:        workflowID,
 		TaskQueue: TaskQueue,

@@ -70,6 +70,7 @@ func NewHandler(reg *registry.Registry, pool *mcpclient.Pool, store DefinitionSt
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/agents", h.listAgents)
+	mux.HandleFunc("GET /api/v1/agents/by-id/{agentID}", h.getAgentByID)
 	mux.HandleFunc("GET /api/v1/agents/{name}", h.getAgent)
 	mux.HandleFunc("GET /api/v1/agents/{name}/raw", h.getRawAgent)
 	mux.HandleFunc("GET /api/v1/agents/{name}/versions", h.listVersions)
@@ -142,6 +143,21 @@ func (h *Handler) getAgent(w http.ResponseWriter, r *http.Request) {
 	ac := auth.FromContext(r)
 	name := r.PathValue("name")
 	def := h.store.GetDefinition(name)
+	if def == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	if ac != nil && !def.VisibleTo(ac.Subject, ac.Teams, ac.IsGlobalAdmin) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, def)
+}
+
+func (h *Handler) getAgentByID(w http.ResponseWriter, r *http.Request) {
+	ac := auth.FromContext(r)
+	agentID := r.PathValue("agentID")
+	def := h.store.GetDefinitionByID(agentID)
 	if def == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
@@ -501,6 +517,7 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	workflowID, await, err := h.temporal.StartWorkflow(r.Context(), temporal.RunAgentParams{
+		AgentID:        def.AgentID,
 		AgentName:      def.Name,
 		Message:        req.Message,
 		History:        req.History,
@@ -781,11 +798,12 @@ func (h *Handler) postChatMessage(w http.ResponseWriter, r *http.Request) {
 		}
 
 		agentResult, err := h.temporal.ExecuteWorkflowSync(ctx, temporal.RunAgentParams{
-			AgentName: def.Name,
-			Message:   req.Message,
-			History:   history,
-			StreamID:  runID,
-			LLMConfig: h.llmConfigInput(),
+			AgentID:    def.AgentID,
+			AgentName:  def.Name,
+			Message:    req.Message,
+			History:    history,
+			StreamID:   runID,
+			LLMConfig:  h.llmConfigInput(),
 		})
 		if err != nil {
 			slog.Error("agent run failed", "agent", sess.AgentID, "error", err)
