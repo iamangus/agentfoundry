@@ -110,7 +110,7 @@ team: engineering     # required when scope is "team"
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/v1/agents` | List agents visible to the authenticated user |
-| `GET` | `/api/v1/agents/by-id/{agentID}` | Get agent definition by AgentID |
+| `GET` | `/api/v1/agent/{agentID}` | Get agent definition by AgentID |
 | `GET` | `/api/v1/agents/{name}` | Get agent definition by name (scoped by visibility) |
 | `POST` | `/api/v1/agents` | Create agent (scope: `user` by default, `team`/`global` require roles) |
 | `PUT` | `/api/v1/agents/{name}` | Update agent (permission-checked) |

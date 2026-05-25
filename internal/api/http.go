@@ -70,7 +70,7 @@ func NewHandler(reg *registry.Registry, pool *mcpclient.Pool, store DefinitionSt
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/agents", h.listAgents)
-	mux.HandleFunc("GET /api/v1/agents/by-id/{agentID}", h.getAgentByID)
+	mux.HandleFunc("GET /api/v1/agent/{agentID}", h.getAgentByID)
 	mux.HandleFunc("GET /api/v1/agents/{name}", h.getAgent)
 	mux.HandleFunc("GET /api/v1/agents/{name}/raw", h.getRawAgent)
 	mux.HandleFunc("GET /api/v1/agents/{name}/versions", h.listVersions)
