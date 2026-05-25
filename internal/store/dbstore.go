@@ -32,7 +32,7 @@ func NewDBStore(pool *pgxpool.Pool, reg AgentRegistrar) *DBStore {
 
 func (s *DBStore) LoadAll(ctx context.Context) error {
 	rows, err := s.pool.Query(ctx, `SELECT agent_id, name, kind, description, model, system_prompt, tools,
-			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by
+			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id
 			FROM agent_definitions ORDER BY name`)
 	if err != nil {
 		return fmt.Errorf("query agent definitions: %w", err)
@@ -56,10 +56,11 @@ func (s *DBStore) LoadAll(ctx context.Context) error {
 			Scope              string
 			Team               string
 			CreatedBy          string
+			ProviderID         string
 		}
 		if err := rows.Scan(&row.AgentID, &row.Name, &row.Kind, &row.Description, &row.Model,
 			&row.SystemPrompt, &row.Tools, &row.MaxTurns, &row.MaxConcurrentTools, &row.ForceJSON,
-			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy); err != nil {
+			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID); err != nil {
 			slog.Error("failed to scan agent definition row", "error", err)
 			continue
 		}
@@ -77,6 +78,7 @@ func (s *DBStore) LoadAll(ctx context.Context) error {
 			Scope:              row.Scope,
 			Team:               row.Team,
 			CreatedBy:          row.CreatedBy,
+			ProviderID:         row.ProviderID,
 		}
 
 		if len(row.Tools) > 0 {
@@ -132,8 +134,8 @@ func (s *DBStore) SaveDefinition(def *config.Definition) error {
 		INSERT INTO agent_definitions
 			(agent_id, name, kind, description, model, system_prompt, tools,
 			 max_turns, max_concurrent_tools, force_json, structured_output,
-			 scope, team, created_by, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+			 scope, team, created_by, provider_id, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
 		ON CONFLICT (name) DO UPDATE SET
 			description         = EXCLUDED.description,
 			model               = EXCLUDED.model,
@@ -145,10 +147,11 @@ func (s *DBStore) SaveDefinition(def *config.Definition) error {
 			structured_output   = EXCLUDED.structured_output,
 			scope               = EXCLUDED.scope,
 			team                = EXCLUDED.team,
+			provider_id         = EXCLUDED.provider_id,
 			updated_at          = NOW()
 	`, def.AgentID, def.Name, string(def.Kind), def.Description, def.Model,
 		def.SystemPrompt, toolsJSON, def.MaxTurns, def.MaxConcurrentTools,
-		def.ForceJSON, soJSON, def.Scope, def.Team, def.CreatedBy,
+		def.ForceJSON, soJSON, def.Scope, def.Team, def.CreatedBy, def.ProviderID,
 	)
 	if err != nil {
 		return fmt.Errorf("save agent definition: %w", err)
@@ -190,14 +193,15 @@ func (s *DBStore) GetDefinition(name string) *config.Definition {
 		Scope              string
 		Team               string
 		CreatedBy          string
+		ProviderID         string
 	}
 	err := s.pool.QueryRow(ctx, `
 		SELECT agent_id, name, kind, description, model, system_prompt, tools,
-			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by
+			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id
 		FROM agent_definitions WHERE name = $1`, name).
 		Scan(&row.AgentID, &row.Name, &row.Kind, &row.Description, &row.Model,
 			&row.SystemPrompt, &row.Tools, &row.MaxTurns, &row.MaxConcurrentTools, &row.ForceJSON,
-			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy)
+			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID)
 	if err != nil {
 		return nil
 	}
@@ -249,14 +253,15 @@ func (s *DBStore) GetDefinitionByID(agentID string) *config.Definition {
 		Scope              string
 		Team               string
 		CreatedBy          string
+		ProviderID         string
 	}
 	err := s.pool.QueryRow(ctx, `
 		SELECT agent_id, name, kind, description, model, system_prompt, tools,
-			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by
+			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id
 		FROM agent_definitions WHERE agent_id = $1`, agentID).
 		Scan(&row.AgentID, &row.Name, &row.Kind, &row.Description, &row.Model,
 			&row.SystemPrompt, &row.Tools, &row.MaxTurns, &row.MaxConcurrentTools, &row.ForceJSON,
-			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy)
+			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID)
 	if err != nil {
 		return nil
 	}
@@ -274,6 +279,7 @@ func (s *DBStore) GetDefinitionByID(agentID string) *config.Definition {
 		Scope:              row.Scope,
 		Team:               row.Team,
 		CreatedBy:          row.CreatedBy,
+		ProviderID:         row.ProviderID,
 	}
 
 	if len(row.Tools) > 0 {

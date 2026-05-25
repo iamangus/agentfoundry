@@ -11,6 +11,7 @@ import (
 // It represents an agent definition.
 type Definition struct {
 	AgentID            string            `yaml:"agent_id,omitempty" json:"agent_id,omitempty"`
+	ProviderID         string            `yaml:"provider_id,omitempty" json:"provider_id,omitempty"`
 	Kind               Kind              `yaml:"kind" json:"kind"`
 	Name               string            `yaml:"name" json:"name"`
 	Description        string            `yaml:"description" json:"description,omitempty"`

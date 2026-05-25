@@ -20,6 +20,7 @@ import (
 	"github.com/angoo/agentfoundry/internal/run"
 	"github.com/angoo/agentfoundry/internal/session"
 	"github.com/angoo/agentfoundry/internal/stream"
+	"github.com/angoo/agentfoundry/internal/store"
 	"github.com/angoo/agentfoundry/internal/temporal"
 )
 
@@ -41,30 +42,32 @@ type VersionedStore interface {
 }
 
 type Handler struct {
-	store     DefinitionStore
-	reg       *registry.Registry
-	pool      *mcpclient.Pool
-	temporal  *temporal.Client
-	streams   *stream.Manager
-	sessions  *session.Store
-	keyStore  *auth.APIKeyStore
-	mcpStore  *auth.MCPServerStore
-	runs      *run.Store
-	llmConfig *config.LLMConf
+	store          DefinitionStore
+	reg            *registry.Registry
+	pool           *mcpclient.Pool
+	temporal       *temporal.Client
+	streams        *stream.Manager
+	sessions       *session.Store
+	keyStore       *auth.APIKeyStore
+	mcpStore       *auth.MCPServerStore
+	runs           *run.Store
+	providerStore  *store.ProviderStore
+	internalAPIKey string
 }
 
-func NewHandler(reg *registry.Registry, pool *mcpclient.Pool, store DefinitionStore, temporalClient *temporal.Client, streams *stream.Manager, sessions *session.Store, keyStore *auth.APIKeyStore, mcpStore *auth.MCPServerStore, runs *run.Store, llmConfig *config.LLMConf) *Handler {
+func NewHandler(reg *registry.Registry, pool *mcpclient.Pool, store DefinitionStore, temporalClient *temporal.Client, streams *stream.Manager, sessions *session.Store, keyStore *auth.APIKeyStore, mcpStore *auth.MCPServerStore, runs *run.Store, providerStore *store.ProviderStore, internalAPIKey string) *Handler {
 	return &Handler{
-		store:     store,
-		reg:       reg,
-		pool:      pool,
-		temporal:  temporalClient,
-		streams:   streams,
-		sessions:  sessions,
-		keyStore:  keyStore,
-		mcpStore:  mcpStore,
-		runs:      runs,
-		llmConfig: llmConfig,
+		store:          store,
+		reg:            reg,
+		pool:           pool,
+		temporal:       temporalClient,
+		streams:        streams,
+		sessions:       sessions,
+		keyStore:       keyStore,
+		mcpStore:       mcpStore,
+		runs:           runs,
+		providerStore:  providerStore,
+		internalAPIKey: internalAPIKey,
 	}
 }
 
@@ -107,6 +110,14 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/mcp-servers/{name}/refresh", h.refreshMCPServer)
 
 	mux.HandleFunc("GET /api/v1/teams", h.listTeams)
+
+	mux.HandleFunc("POST /api/v1/providers", h.createProvider)
+	mux.HandleFunc("GET /api/v1/providers", h.listProviders)
+	mux.HandleFunc("GET /api/v1/providers/{name}", h.getProvider)
+	mux.HandleFunc("PUT /api/v1/providers/{name}", h.updateProvider)
+	mux.HandleFunc("DELETE /api/v1/providers/{name}", h.deleteProvider)
+
+	mux.HandleFunc("POST /api/v1/inference/agents/{agentID}/chat/completions", h.inferenceProxy)
 
 	slog.Info("API routes registered", "prefix", "/api/v1")
 }
@@ -523,7 +534,7 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 		History:        req.History,
 		MCPServers:     req.MCPServers,
 		ResponseSchema: req.ResponseSchema,
-		LLMConfig:      h.llmConfigInput(),
+		LLMConfig:      h.buildLLMConfig(r.Context(), def),
 	})
 	if err != nil {
 		for _, n := range ephemeralNames {
@@ -611,16 +622,17 @@ func (h *Handler) getRawAgent(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-func (h *Handler) llmConfigInput() *temporal.LLMConfigInput {
-	if h.llmConfig == nil {
+func (h *Handler) buildLLMConfig(ctx context.Context, def *config.Definition) *temporal.LLMConfigInput {
+	if def == nil || def.ProviderID == "" {
+		return nil
+	}
+	prov, err := h.providerStore.GetByID(ctx, def.ProviderID)
+	if err != nil {
+		slog.Warn("failed to resolve provider for agent", "agent_id", def.AgentID, "provider_id", def.ProviderID, "error", err)
 		return nil
 	}
 	return &temporal.LLMConfigInput{
-		BaseURL:          h.llmConfig.BaseURL,
-		APIKey:           h.llmConfig.APIKey,
-		DefaultModel:     h.llmConfig.DefaultModel,
-		Headers:          h.llmConfig.Headers,
-		SchemaValidation: h.llmConfig.SchemaValidation,
+		SchemaValidation: prov.SchemaValidation,
 	}
 }
 
@@ -803,7 +815,7 @@ func (h *Handler) postChatMessage(w http.ResponseWriter, r *http.Request) {
 			Message:    req.Message,
 			History:    history,
 			StreamID:   runID,
-			LLMConfig:  h.llmConfigInput(),
+			LLMConfig:  h.buildLLMConfig(ctx, def),
 		})
 		if err != nil {
 			slog.Error("agent run failed", "agent", sess.AgentID, "error", err)

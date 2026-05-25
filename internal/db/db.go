@@ -110,6 +110,25 @@ func (p *Pool) Migrate(ctx context.Context) error {
 			created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_agent_versions_agent_id ON agent_versions (agent_id, created_at DESC)`,
+
+		`ALTER TABLE agent_definitions ADD COLUMN IF NOT EXISTS provider_id TEXT NOT NULL DEFAULT ''`,
+
+		`CREATE TABLE IF NOT EXISTS inference_providers (
+			id                TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+			name              TEXT NOT NULL UNIQUE,
+			provider_type     TEXT NOT NULL DEFAULT 'custom',
+			base_url          TEXT NOT NULL DEFAULT '',
+			api_key           TEXT NOT NULL DEFAULT '',
+			default_model     TEXT NOT NULL DEFAULT '',
+			schema_validation BOOLEAN NOT NULL DEFAULT true,
+			headers           JSONB DEFAULT '{}',
+			scope             TEXT NOT NULL DEFAULT 'user',
+			team              TEXT,
+			created_by        TEXT NOT NULL,
+			created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_inference_providers_scope ON inference_providers (scope, team)`,
 	}
 
 	for _, m := range migrations {

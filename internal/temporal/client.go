@@ -19,11 +19,7 @@ const (
 )
 
 type LLMConfigInput struct {
-	BaseURL          string            `json:"base_url,omitempty"`
-	APIKey           string            `json:"api_key,omitempty"`
-	DefaultModel     string            `json:"default_model,omitempty"`
-	Headers          map[string]string `json:"headers,omitempty"`
-	SchemaValidation bool              `json:"schema_validation"`
+	SchemaValidation bool `json:"schema_validation"`
 }
 
 type RunAgentParams struct {
