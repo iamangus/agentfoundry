@@ -7,22 +7,19 @@ import (
 	"github.com/angoo/agentfoundry/internal/config"
 )
 
-// Registry stores agent definitions.
-// Tool discovery is handled by the MCP client pool; the registry
-// only stores agents.
 type Registry struct {
 	mu        sync.RWMutex
 	agentDefs map[string]*config.Definition // name -> agent definition
+	byID      map[string]*config.Definition // agent_id -> agent definition
 }
 
-// New creates a new empty registry.
 func New() *Registry {
 	return &Registry{
 		agentDefs: make(map[string]*config.Definition),
+		byID:      make(map[string]*config.Definition),
 	}
 }
 
-// RegisterAgent stores an agent definition.
 func (r *Registry) RegisterAgent(def *config.Definition) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -32,11 +29,13 @@ func (r *Registry) RegisterAgent(def *config.Definition) error {
 	}
 
 	r.agentDefs[def.Name] = def
-	slog.Info("agent registered", "name", def.Name, "tools", def.Tools)
+	if def.AgentID != "" {
+		r.byID[def.AgentID] = def
+	}
+	slog.Info("agent registered", "name", def.Name, "agent_id", def.AgentID, "tools", def.Tools)
 	return nil
 }
 
-// GetAgentDef returns an agent definition by name.
 func (r *Registry) GetAgentDef(name string) (*config.Definition, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -44,7 +43,13 @@ func (r *Registry) GetAgentDef(name string) (*config.Definition, bool) {
 	return def, ok
 }
 
-// ListAgentDefs returns all registered agent definitions.
+func (r *Registry) GetAgentByID(agentID string) (*config.Definition, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	def, ok := r.byID[agentID]
+	return def, ok
+}
+
 func (r *Registry) ListAgentDefs() []*config.Definition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -55,7 +60,6 @@ func (r *Registry) ListAgentDefs() []*config.Definition {
 	return defs
 }
 
-// ListAgentNames returns all registered agent names.
 func (r *Registry) ListAgentNames() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -66,9 +70,13 @@ func (r *Registry) ListAgentNames() []string {
 	return names
 }
 
-// Remove removes an agent by name.
 func (r *Registry) Remove(name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if def, ok := r.agentDefs[name]; ok {
+		if def.AgentID != "" {
+			delete(r.byID, def.AgentID)
+		}
+	}
 	delete(r.agentDefs, name)
 }

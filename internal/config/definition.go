@@ -10,6 +10,7 @@ import (
 // Definition is the structure parsed from a YAML file.
 // It represents an agent definition.
 type Definition struct {
+	AgentID            string            `yaml:"agent_id,omitempty" json:"agent_id,omitempty"`
 	Kind               Kind              `yaml:"kind" json:"kind"`
 	Name               string            `yaml:"name" json:"name"`
 	Description        string            `yaml:"description" json:"description,omitempty"`
@@ -112,6 +113,13 @@ const (
 	ScopeTeam   Scope = "team"
 	ScopeUser   Scope = "user"
 )
+
+type AgentVersion struct {
+	VersionID    string `json:"version_id"`
+	LastModified string `json:"last_modified"`
+	Size         int64  `json:"size"`
+	IsLatest     bool   `json:"is_latest"`
+}
 
 func (d *Definition) Validate() error {
 	if d.Name == "" {

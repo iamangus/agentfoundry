@@ -79,6 +79,37 @@ func (p *Pool) Migrate(ctx context.Context) error {
 			created_by  TEXT NOT NULL,
 			PRIMARY KEY (server_id, tool_name)
 		)`,
+
+		`CREATE TABLE IF NOT EXISTS agent_definitions (
+			id                   TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+			agent_id             TEXT NOT NULL UNIQUE,
+			name                 TEXT NOT NULL UNIQUE,
+			kind                 TEXT NOT NULL DEFAULT 'agent',
+			description          TEXT NOT NULL DEFAULT '',
+			model                TEXT NOT NULL DEFAULT '',
+			system_prompt        TEXT NOT NULL,
+			tools                JSONB DEFAULT '[]',
+			max_turns            INT NOT NULL DEFAULT 10,
+			max_concurrent_tools INT NOT NULL DEFAULT 0,
+			force_json           BOOLEAN NOT NULL DEFAULT false,
+			structured_output    JSONB,
+			scope                TEXT NOT NULL DEFAULT 'user',
+			team                 TEXT,
+			created_by           TEXT NOT NULL,
+			created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_definitions_agent_id ON agent_definitions (agent_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_definitions_scope ON agent_definitions (scope, team)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_definitions_created_by ON agent_definitions (created_by)`,
+
+		`CREATE TABLE IF NOT EXISTS agent_versions (
+			id              TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+			agent_id        TEXT NOT NULL REFERENCES agent_definitions(agent_id) ON DELETE CASCADE,
+			definition_yaml TEXT NOT NULL,
+			created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_versions_agent_id ON agent_versions (agent_id, created_at DESC)`,
 	}
 
 	for _, m := range migrations {

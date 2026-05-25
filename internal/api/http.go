@@ -27,6 +27,7 @@ type DefinitionStore interface {
 	SaveDefinition(def *config.Definition) error
 	DeleteDefinition(name string) error
 	GetDefinition(name string) *config.Definition
+	GetDefinitionByID(agentID string) *config.Definition
 	ListDefinitions() []*config.Definition
 	GetRawDefinition(name string) ([]byte, error)
 	SaveRawDefinition(name string, data []byte) error
@@ -34,16 +35,9 @@ type DefinitionStore interface {
 
 type VersionedStore interface {
 	DefinitionStore
-	ListVersions(ctx context.Context, name string) ([]AgentVersion, error)
+	ListVersions(ctx context.Context, name string) ([]config.AgentVersion, error)
 	GetVersion(ctx context.Context, name, versionID string) ([]byte, *config.Definition, error)
 	Rollback(ctx context.Context, name, versionID string) error
-}
-
-type AgentVersion struct {
-	VersionID    string `json:"version_id"`
-	LastModified string `json:"last_modified"`
-	Size         int64  `json:"size"`
-	IsLatest     bool   `json:"is_latest"`
 }
 
 type Handler struct {
@@ -477,11 +471,11 @@ type runAgentResponse struct {
 }
 
 func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
+	agentID := r.PathValue("name")
 
-	_, ok := h.reg.GetAgentDef(name)
-	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found: " + name})
+	def := h.store.GetDefinitionByID(agentID)
+	if def == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found: " + agentID})
 		return
 	}
 
@@ -507,7 +501,7 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	workflowID, await, err := h.temporal.StartWorkflow(r.Context(), temporal.RunAgentParams{
-		AgentName:      name,
+		AgentName:      def.Name,
 		Message:        req.Message,
 		History:        req.History,
 		MCPServers:     req.MCPServers,
@@ -518,12 +512,12 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 		for _, n := range ephemeralNames {
 			h.pool.UnregisterEphemeral(n)
 		}
-		slog.Error("failed to start temporal workflow", "agent", name, "error", err)
+		slog.Error("failed to start temporal workflow", "agent", def.Name, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to start workflow: " + err.Error()})
 		return
 	}
 
-	newRun := h.runs.Create(name)
+	newRun := h.runs.Create(def.Name)
 	h.runs.SetWorkflowID(newRun.ID, workflowID)
 
 	go func() {
@@ -540,13 +534,13 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 
 		agentResult, err := await(ctx)
 		if err != nil {
-			slog.Error("agent run failed", "agent", name, "run_id", newRun.ID, "error", err)
+			slog.Error("agent run failed", "agent", def.Name, "run_id", newRun.ID, "error", err)
 			h.runs.UpdateStatus(newRun.ID, run.StatusFailed, "", err.Error())
 			cleanup()
 			return
 		}
 
-		slog.Info("agent run completed", "agent", name, "run_id", newRun.ID)
+		slog.Info("agent run completed", "agent", def.Name, "run_id", newRun.ID)
 		h.runs.UpdateStatus(newRun.ID, run.StatusCompleted, agentResult.Response, "")
 		cleanup()
 	}()
