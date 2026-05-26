@@ -254,6 +254,16 @@ func (h *Handler) updateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !existing.CanEdit(ac.Subject, ac.Teams, ac.IsGlobalAdmin, ac.IsTeamAdmin) {
+		slog.Warn("agent edit permission denied",
+			"agent", name,
+			"scope", existing.Scope,
+			"team", existing.Team,
+			"created_by", existing.CreatedBy,
+			"subject", ac.Subject,
+			"user_teams", ac.Teams,
+			"is_global_admin", ac.IsGlobalAdmin,
+			"is_team_admin", ac.IsTeamAdmin,
+		)
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
 		return
 	}
