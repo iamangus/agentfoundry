@@ -1062,11 +1062,17 @@ func (h *Handler) listTeams(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listExecutions(w http.ResponseWriter, r *http.Request) {
+	ac := auth.FromContext(r)
+
 	query := fmt.Sprintf("WorkflowType = '%s'", temporal.WorkflowType)
 	if status := r.URL.Query().Get("status"); status != "" {
 		query += fmt.Sprintf(" AND ExecutionStatus = '%s'", status)
 	}
 	if agent := r.URL.Query().Get("agent_name"); agent != "" {
+		if !h.agentVisible(ac, agent) {
+			writeJSON(w, http.StatusOK, []temporal.ExecutionInfo{})
+			return
+		}
 		query += fmt.Sprintf(" AND AgentName = '%s'", agent)
 	}
 
@@ -1077,10 +1083,25 @@ func (h *Handler) listExecutions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, execs)
+	if ac != nil && ac.IsGlobalAdmin {
+		writeJSON(w, http.StatusOK, execs)
+		return
+	}
+
+	visibleAgents := h.visibleAgentNames(ac)
+
+	var filtered []temporal.ExecutionInfo
+	for _, e := range execs {
+		if visibleAgents[e.AgentName] {
+			filtered = append(filtered, e)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, filtered)
 }
 
 func (h *Handler) getExecution(w http.ResponseWriter, r *http.Request) {
+	ac := auth.FromContext(r)
 	workflowID := r.PathValue("workflowId")
 
 	detail, err := h.temporal.GetWorkflowHistory(r.Context(), workflowID, "")
@@ -1090,5 +1111,55 @@ func (h *Handler) getExecution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if ac != nil && ac.IsGlobalAdmin {
+		writeJSON(w, http.StatusOK, detail)
+		return
+	}
+
+	def := h.store.GetDefinition(detail.AgentName)
+	if def == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+
+	if ac == nil {
+		if !def.VisibleTo("", nil, false) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+	} else {
+		if !def.VisibleTo(ac.Subject, ac.Teams, ac.IsGlobalAdmin) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+	}
+
 	writeJSON(w, http.StatusOK, detail)
+}
+
+func (h *Handler) agentVisible(ac *auth.AuthContext, agentName string) bool {
+	def := h.store.GetDefinition(agentName)
+	if def == nil {
+		return false
+	}
+	if ac == nil {
+		return def.VisibleTo("", nil, false)
+	}
+	return def.VisibleTo(ac.Subject, ac.Teams, ac.IsGlobalAdmin)
+}
+
+func (h *Handler) visibleAgentNames(ac *auth.AuthContext) map[string]bool {
+	names := make(map[string]bool)
+	for _, d := range h.store.ListDefinitions() {
+		if ac == nil {
+			if d.VisibleTo("", nil, false) {
+				names[d.Name] = true
+			}
+		} else {
+			if d.VisibleTo(ac.Subject, ac.Teams, ac.IsGlobalAdmin) {
+				names[d.Name] = true
+			}
+		}
+	}
+	return names
 }
