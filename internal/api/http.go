@@ -119,6 +119,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("POST /api/v1/inference/agents/{agentID}/chat/completions", h.inferenceProxy)
 
+	mux.HandleFunc("GET /api/v1/executions", h.listExecutions)
+	mux.HandleFunc("GET /api/v1/executions/{workflowId}", h.getExecution)
+
 	slog.Info("API routes registered", "prefix", "/api/v1")
 }
 
@@ -1056,4 +1059,36 @@ func (h *Handler) listTeams(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"teams": ac.Teams})
+}
+
+func (h *Handler) listExecutions(w http.ResponseWriter, r *http.Request) {
+	query := fmt.Sprintf("WorkflowType = '%s'", temporal.WorkflowType)
+	if status := r.URL.Query().Get("status"); status != "" {
+		query += fmt.Sprintf(" AND ExecutionStatus = '%s'", status)
+	}
+	if agent := r.URL.Query().Get("agent_name"); agent != "" {
+		query += fmt.Sprintf(" AND AgentName = '%s'", agent)
+	}
+
+	execs, err := h.temporal.ListWorkflows(r.Context(), query, 100)
+	if err != nil {
+		slog.Error("failed to list executions", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list executions: " + err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, execs)
+}
+
+func (h *Handler) getExecution(w http.ResponseWriter, r *http.Request) {
+	workflowID := r.PathValue("workflowId")
+
+	detail, err := h.temporal.GetWorkflowHistory(r.Context(), workflowID, "")
+	if err != nil {
+		slog.Error("failed to get execution history", "workflow_id", workflowID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get execution: " + err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, detail)
 }

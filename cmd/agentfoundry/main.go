@@ -139,6 +139,10 @@ func main() {
 	}
 	defer temporalClient.Close()
 
+	if err := temporalClient.EnsureSearchAttributes(context.Background()); err != nil {
+		slog.Error("failed to register temporal search attributes", "error", err)
+	}
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
