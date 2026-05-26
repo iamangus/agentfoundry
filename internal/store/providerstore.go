@@ -183,7 +183,7 @@ func (s *ProviderStore) ListAll(ctx context.Context) ([]ProviderRecord, error) {
 	return results, nil
 }
 
-func (s *ProviderStore) Update(ctx context.Context, name string, providerType, baseURL, apiKey, defaultModel string, schemaValidation bool, scope, team string, headers map[string]string) (*ProviderRecord, error) {
+func (s *ProviderStore) Update(ctx context.Context, id, name, providerType, baseURL, apiKey, defaultModel string, schemaValidation bool, scope, team string, headers map[string]string) (*ProviderRecord, error) {
 	headersJSON, err := json.Marshal(headers)
 	if err != nil {
 		return nil, fmt.Errorf("marshal headers: %w", err)
@@ -193,8 +193,8 @@ func (s *ProviderStore) Update(ctx context.Context, name string, providerType, b
 	var updatedAt time.Time
 
 	err = s.db.QueryRow(ctx,
-		`UPDATE inference_providers SET provider_type = $1, base_url = $2, api_key = $3, default_model = $4, schema_validation = $5, headers = $6, scope = $7, team = $8, updated_at = NOW() WHERE name = $9 RETURNING id, name, provider_type, base_url, api_key, default_model, schema_validation, headers, scope, team, created_by, created_at, updated_at`,
-		providerType, baseURL, apiKey, defaultModel, schemaValidation, headersJSON, scope, team, name,
+		`UPDATE inference_providers SET name = $1, provider_type = $2, base_url = $3, api_key = $4, default_model = $5, schema_validation = $6, headers = $7, scope = $8, team = $9, updated_at = NOW() WHERE id = $10 RETURNING id, name, provider_type, base_url, api_key, default_model, schema_validation, headers, scope, team, created_by, created_at, updated_at`,
+		name, providerType, baseURL, apiKey, defaultModel, schemaValidation, headersJSON, scope, team, id,
 	).Scan(&rec.ID, &rec.Name, &rec.ProviderType, &rec.BaseURL, &rec.APIKey, &rec.DefaultModel, &rec.SchemaValidation, &headersJSON, &rec.Scope, &rec.Team, &rec.CreatedBy, &rec.CreatedAt, &updatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, ErrProviderNotFound
@@ -208,8 +208,8 @@ func (s *ProviderStore) Update(ctx context.Context, name string, providerType, b
 	return &rec, nil
 }
 
-func (s *ProviderStore) Delete(ctx context.Context, name string) error {
-	tag, err := s.db.Exec(ctx, `DELETE FROM inference_providers WHERE name = $1`, name)
+func (s *ProviderStore) Delete(ctx context.Context, id string) error {
+	tag, err := s.db.Exec(ctx, `DELETE FROM inference_providers WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("delete inference provider: %w", err)
 	}

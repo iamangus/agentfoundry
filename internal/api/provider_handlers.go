@@ -22,6 +22,7 @@ type createProviderRequest struct {
 }
 
 type updateProviderRequest struct {
+	Name             string            `json:"name"`
 	ProviderType     string            `json:"provider_type"`
 	BaseURL          string            `json:"base_url"`
 	APIKey           string            `json:"api_key"`
@@ -117,15 +118,15 @@ func (h *Handler) updateProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name := r.PathValue("name")
+	id := r.PathValue("id")
 
-	var req updateProviderRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+	existing, err := h.providerStore.GetByID(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
 	}
 
-	canEdit, existing, err := h.providerStore.CanEdit(r.Context(), ac.Subject, ac.Teams, ac.IsGlobalAdmin, ac.IsTeamAdmin, name)
+	canEdit, _, err := h.providerStore.CanEdit(r.Context(), ac.Subject, ac.Teams, ac.IsGlobalAdmin, ac.IsTeamAdmin, existing.Name)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
@@ -135,13 +136,23 @@ func (h *Handler) updateProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var req updateProviderRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+
+	if req.Name == "" {
+		req.Name = existing.Name
+	}
+
 	if req.APIKey == "***" || req.APIKey == "" {
 		req.APIKey = existing.APIKey
 	}
 
-	rec, err := h.providerStore.Update(r.Context(), name, req.ProviderType, req.BaseURL, req.APIKey, req.DefaultModel, req.SchemaValidation, req.Scope, req.Team, req.Headers)
+	rec, err := h.providerStore.Update(r.Context(), id, req.Name, req.ProviderType, req.BaseURL, req.APIKey, req.DefaultModel, req.SchemaValidation, req.Scope, req.Team, req.Headers)
 	if err != nil {
-		slog.Error("failed to update provider", "name", name, "error", err)
+		slog.Error("failed to update provider", "id", id, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -157,9 +168,15 @@ func (h *Handler) deleteProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name := r.PathValue("name")
+	id := r.PathValue("id")
 
-	canDelete, err := h.providerStore.CanDelete(ac.Subject, ac.Teams, ac.IsGlobalAdmin, ac.IsTeamAdmin, name)
+	existing, err := h.providerStore.GetByID(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+
+	canDelete, err := h.providerStore.CanDelete(ac.Subject, ac.Teams, ac.IsGlobalAdmin, ac.IsTeamAdmin, existing.Name)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
@@ -169,8 +186,8 @@ func (h *Handler) deleteProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.providerStore.Delete(r.Context(), name); err != nil {
-		slog.Error("failed to delete provider", "name", name, "error", err)
+	if err := h.providerStore.Delete(r.Context(), id); err != nil {
+		slog.Error("failed to delete provider", "id", id, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

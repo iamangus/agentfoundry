@@ -104,18 +104,18 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/mcp-servers", h.registerMCPServer)
 	mux.HandleFunc("GET /api/v1/mcp-servers", h.listMCPServers)
 	mux.HandleFunc("GET /api/v1/mcp-servers/{name}", h.getMCPServer)
-	mux.HandleFunc("PUT /api/v1/mcp-servers/{name}", h.updateMCPServer)
-	mux.HandleFunc("DELETE /api/v1/mcp-servers/{name}", h.deleteMCPServer)
-	mux.HandleFunc("PUT /api/v1/mcp-servers/{name}/tools/{tool}", h.setToolScope)
-	mux.HandleFunc("POST /api/v1/mcp-servers/{name}/refresh", h.refreshMCPServer)
+	mux.HandleFunc("PUT /api/v1/mcp-servers/{id}", h.updateMCPServer)
+	mux.HandleFunc("DELETE /api/v1/mcp-servers/{id}", h.deleteMCPServer)
+	mux.HandleFunc("PUT /api/v1/mcp-servers/{id}/tools/{tool}", h.setToolScope)
+	mux.HandleFunc("POST /api/v1/mcp-servers/{id}/refresh", h.refreshMCPServer)
 
 	mux.HandleFunc("GET /api/v1/teams", h.listTeams)
 
 	mux.HandleFunc("POST /api/v1/providers", h.createProvider)
 	mux.HandleFunc("GET /api/v1/providers", h.listProviders)
 	mux.HandleFunc("GET /api/v1/providers/{name}", h.getProvider)
-	mux.HandleFunc("PUT /api/v1/providers/{name}", h.updateProvider)
-	mux.HandleFunc("DELETE /api/v1/providers/{name}", h.deleteProvider)
+	mux.HandleFunc("PUT /api/v1/providers/{id}", h.updateProvider)
+	mux.HandleFunc("DELETE /api/v1/providers/{id}", h.deleteProvider)
 
 	mux.HandleFunc("POST /api/v1/inference/agents/{agentID}/chat/completions", h.inferenceProxy)
 

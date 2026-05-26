@@ -202,26 +202,32 @@ func (h *Handler) updateMCPServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	serverName := r.PathValue("name")
+	id := r.PathValue("id")
 
-	var req createMCPServerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
-		return
-	}
-
-	ok, existing, err := h.mcpStore.CanEdit(ac.Subject, ac.Teams, ac.IsGlobalAdmin, ac.IsTeamAdmin, serverName)
+	existing, err := h.mcpStore.GetByID(r.Context(), id)
 	if err != nil {
 		if err == auth.ErrMCPServerNotFound {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "mcp server not found"})
 			return
 		}
-		slog.Error("failed to check edit permission", "name", serverName, "error", err)
+		slog.Error("failed to get mcp server by id", "id", id, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get server"})
+		return
+	}
+
+	ok, _, err := h.mcpStore.CanEdit(ac.Subject, ac.Teams, ac.IsGlobalAdmin, ac.IsTeamAdmin, existing.Name)
+	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to check permissions"})
 		return
 	}
 	if !ok {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
+		return
+	}
+
+	var req createMCPServerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 		return
 	}
 
@@ -262,11 +268,12 @@ func (h *Handler) updateMCPServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.pool.DisconnectDynamic(serverName)
+	oldName := existing.Name
+	h.pool.DisconnectDynamic(oldName)
 
-	rec, err := h.mcpStore.Update(r.Context(), serverName, req.URL, req.Transport, req.Scope, req.Team, req.Headers)
+	rec, err := h.mcpStore.Update(r.Context(), id, req.Name, req.URL, req.Transport, req.Scope, req.Team, req.Headers)
 	if err != nil {
-		slog.Error("failed to update mcp server", "name", serverName, "error", err)
+		slog.Error("failed to update mcp server", "id", id, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update server"})
 		return
 	}
@@ -297,15 +304,21 @@ func (h *Handler) deleteMCPServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	serverName := r.PathValue("name")
+	id := r.PathValue("id")
 
-	ok, _, err := h.mcpStore.CanEdit(ac.Subject, ac.Teams, ac.IsGlobalAdmin, ac.IsTeamAdmin, serverName)
+	existing, err := h.mcpStore.GetByID(r.Context(), id)
 	if err != nil {
 		if err == auth.ErrMCPServerNotFound {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "mcp server not found"})
 			return
 		}
-		slog.Error("failed to check edit permission", "name", serverName, "error", err)
+		slog.Error("failed to get mcp server by id", "id", id, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get server"})
+		return
+	}
+
+	ok, _, err := h.mcpStore.CanEdit(ac.Subject, ac.Teams, ac.IsGlobalAdmin, ac.IsTeamAdmin, existing.Name)
+	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to check permissions"})
 		return
 	}
@@ -314,10 +327,10 @@ func (h *Handler) deleteMCPServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.pool.DisconnectDynamic(serverName)
+	h.pool.DisconnectDynamic(existing.Name)
 
-	if err := h.mcpStore.Delete(r.Context(), serverName); err != nil {
-		slog.Error("failed to delete mcp server", "name", serverName, "error", err)
+	if err := h.mcpStore.Delete(r.Context(), id); err != nil {
+		slog.Error("failed to delete mcp server", "id", id, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete server"})
 		return
 	}
@@ -337,16 +350,22 @@ func (h *Handler) setToolScope(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	serverName := r.PathValue("name")
+	id := r.PathValue("id")
 	toolName := r.PathValue("tool")
 
-	ok, rec, err := h.mcpStore.CanEdit(ac.Subject, ac.Teams, ac.IsGlobalAdmin, ac.IsTeamAdmin, serverName)
+	rec, err := h.mcpStore.GetByID(r.Context(), id)
 	if err != nil {
 		if err == auth.ErrMCPServerNotFound {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "mcp server not found"})
 			return
 		}
-		slog.Error("failed to check edit permission", "name", serverName, "error", err)
+		slog.Error("failed to get mcp server by id", "id", id, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get server"})
+		return
+	}
+
+	ok, _, err := h.mcpStore.CanEdit(ac.Subject, ac.Teams, ac.IsGlobalAdmin, ac.IsTeamAdmin, rec.Name)
+	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to check permissions"})
 		return
 	}
@@ -385,7 +404,7 @@ func (h *Handler) setToolScope(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.mcpStore.SetToolScope(r.Context(), rec.ID, toolName, req.Scope, req.Team, ac.Subject); err != nil {
-		slog.Error("failed to set tool scope", "server", serverName, "tool", toolName, "error", err)
+		slog.Error("failed to set tool scope", "server", rec.Name, "tool", toolName, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to set tool scope"})
 		return
 	}
@@ -405,20 +424,20 @@ func (h *Handler) refreshMCPServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	serverName := r.PathValue("name")
+	id := r.PathValue("id")
 
-	_, err := h.mcpStore.GetByName(r.Context(), serverName)
+	rec, err := h.mcpStore.GetByID(r.Context(), id)
 	if err != nil {
 		if err == auth.ErrMCPServerNotFound {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "mcp server not found"})
 			return
 		}
-		slog.Error("failed to get mcp server", "name", serverName, "error", err)
+		slog.Error("failed to get mcp server", "id", id, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get server"})
 		return
 	}
 
-	h.pool.RefreshServer(serverName)
+	h.pool.RefreshServer(rec.Name)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "refresh triggered"})
 }

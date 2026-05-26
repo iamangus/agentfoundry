@@ -214,7 +214,33 @@ func (s *MCPServerStore) CanEdit(subject string, teams []string, isGlobalAdmin, 
 	}
 }
 
-func (s *MCPServerStore) Update(ctx context.Context, name string, url, transport, scope, team string, headers map[string]string) (*MCPServerRecord, error) {
+func (s *MCPServerStore) GetByID(ctx context.Context, id string) (*MCPServerRecord, error) {
+	var rec MCPServerRecord
+	var headersJSON []byte
+	var team *string
+
+	err := s.db.QueryRow(ctx,
+		`SELECT id, name, url, transport, headers, scope, team, created_by, created_at, updated_at FROM mcp_servers WHERE id = $1`,
+		id,
+	).Scan(&rec.ID, &rec.Name, &rec.URL, &rec.Transport, &headersJSON, &rec.Scope, &team, &rec.CreatedBy, &rec.CreatedAt, &rec.UpdatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, ErrMCPServerNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get mcp server by id: %w", err)
+	}
+
+	if team != nil {
+		rec.Team = *team
+	}
+	_ = json.Unmarshal(headersJSON, &rec.Headers)
+	if rec.Headers == nil {
+		rec.Headers = map[string]string{}
+	}
+	return &rec, nil
+}
+
+func (s *MCPServerStore) Update(ctx context.Context, id, name, url, transport, scope, team string, headers map[string]string) (*MCPServerRecord, error) {
 	headersJSON, err := json.Marshal(headers)
 	if err != nil {
 		return nil, fmt.Errorf("marshal headers: %w", err)
@@ -225,8 +251,8 @@ func (s *MCPServerStore) Update(ctx context.Context, name string, url, transport
 	var dbTeam *string
 
 	err = s.db.QueryRow(ctx,
-		`UPDATE mcp_servers SET url=$2, transport=$3, headers=$4, scope=$5, team=$6, updated_at=NOW() WHERE name=$1 RETURNING id, name, url, transport, headers, scope, team, created_by, created_at, updated_at`,
-		name, url, transport, headersJSON, scope, team,
+		`UPDATE mcp_servers SET name=$1, url=$2, transport=$3, headers=$4, scope=$5, team=$6, updated_at=NOW() WHERE id=$7 RETURNING id, name, url, transport, headers, scope, team, created_by, created_at, updated_at`,
+		name, url, transport, headersJSON, scope, team, id,
 	).Scan(&rec.ID, &rec.Name, &rec.URL, &rec.Transport, &hdrJSON, &rec.Scope, &dbTeam, &rec.CreatedBy, &rec.CreatedAt, &rec.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, ErrMCPServerNotFound
@@ -245,8 +271,8 @@ func (s *MCPServerStore) Update(ctx context.Context, name string, url, transport
 	return &rec, nil
 }
 
-func (s *MCPServerStore) Delete(ctx context.Context, name string) error {
-	tag, err := s.db.Exec(ctx, `DELETE FROM mcp_servers WHERE name = $1`, name)
+func (s *MCPServerStore) Delete(ctx context.Context, id string) error {
+	tag, err := s.db.Exec(ctx, `DELETE FROM mcp_servers WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("delete mcp server: %w", err)
 	}
