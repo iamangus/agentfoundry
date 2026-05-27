@@ -95,6 +95,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/chat/sessions", h.listChatSessions)
 	mux.HandleFunc("GET /api/v1/chat/sessions/{id}", h.getChatSession)
 	mux.HandleFunc("POST /api/v1/chat/sessions/{id}/messages", h.postChatMessage)
+	mux.HandleFunc("GET /api/v1/chat/sessions/{id}/stream", h.sessionStream)
 	mux.HandleFunc("GET /api/v1/chat/runs/{id}/events", h.runEvents)
 
 	mux.HandleFunc("POST /api/v1/api-keys", h.createAPIKey)
@@ -892,6 +893,74 @@ func (h *Handler) runEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ch, unsubscribe := h.streams.Get(runID).Subscribe()
+	defer unsubscribe()
+
+	buf := make([]byte, 0, 256)
+	for {
+		select {
+		case evt, open := <-ch:
+			if !open {
+				return
+			}
+			buf = buf[:0]
+			buf = append(buf, "event: "...)
+			buf = append(buf, evt.Type...)
+			buf = append(buf, "\ndata: "...)
+			if strings.Contains(evt.Data, "\n") {
+				buf = append(buf, strings.ReplaceAll(evt.Data, "\n", "\ndata: ")...)
+			} else {
+				buf = append(buf, evt.Data...)
+			}
+			buf = append(buf, "\n\n"...)
+			w.Write(buf)
+			flusher.Flush()
+			if evt.Type == "done" || evt.Type == "error" {
+				return
+			}
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+func (h *Handler) sessionStream(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("id")
+
+	sess := h.sessions.Get(sessionID)
+	if sess == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+
+	ac := auth.FromContext(r)
+	if ac == nil || sess.Owner != ac.Subject {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+
+	runID := sess.ActiveRunID
+	if runID == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no active run for this session"})
+		return
+	}
+
+	s := h.streams.Get(runID)
+	if s == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "run stream not found"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	ch, unsubscribe := s.Subscribe()
 	defer unsubscribe()
 
 	buf := make([]byte, 0, 256)
