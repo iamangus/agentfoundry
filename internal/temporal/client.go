@@ -178,6 +178,16 @@ type HistoryEvent struct {
 	Details   interface{} `json:"details,omitempty"`
 }
 
+type TimelineSpan struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Type         string `json:"type"`
+	StartTime    string `json:"start_time"`
+	EndTime      string `json:"end_time,omitempty"`
+	StartEventID int64  `json:"start_event_id"`
+	EndEventID   int64  `json:"end_event_id"`
+}
+
 type ExecutionDetail struct {
 	WorkflowID string         `json:"workflow_id"`
 	RunID      string         `json:"run_id"`
@@ -187,6 +197,17 @@ type ExecutionDetail struct {
 	StartTime  string         `json:"start_time"`
 	CloseTime  string         `json:"close_time,omitempty"`
 	History    []HistoryEvent `json:"history"`
+	Spans      []TimelineSpan `json:"spans"`
+}
+
+type spanDatum struct {
+	id              int64
+	eventType       string
+	ts              time.Time
+	name            string
+	scheduledEventID int64
+	initiatedEventID int64
+	timerID         string
 }
 
 func (c *Client) EnsureSearchAttributes(ctx context.Context) error {
@@ -258,6 +279,7 @@ func (c *Client) GetWorkflowHistory(ctx context.Context, workflowID, runID strin
 	}
 
 	var history []HistoryEvent
+	var spanData []spanDatum
 	firstEvent := true
 	for iter.HasNext() {
 		event, err := iter.Next()
@@ -266,9 +288,11 @@ func (c *Client) GetWorkflowHistory(ctx context.Context, workflowID, runID strin
 		}
 
 		eventType := event.GetEventType().String()
+		var eventTs time.Time
 		eventTime := ""
 		if ts := event.GetEventTime(); ts != nil {
-			eventTime = ts.AsTime().Format(time.RFC3339)
+			eventTs = ts.AsTime()
+			eventTime = eventTs.Format(time.RFC3339)
 		}
 
 		he := HistoryEvent{
@@ -313,9 +337,11 @@ func (c *Client) GetWorkflowHistory(ctx context.Context, workflowID, runID strin
 		}
 
 		history = append(history, he)
+		spanData = append(spanData, collectSpanDatum(event, eventTs))
 	}
 
 	detail.History = history
+	detail.Spans = buildTimeline(spanData)
 	if detail.Status == "" {
 		detail.Status = "Running"
 	}
@@ -416,6 +442,107 @@ func decodeHistoryPayloads(v interface{}) {
 		for _, item := range val {
 			decodeHistoryPayloads(item)
 		}
+	}
+}
+
+func collectSpanDatum(event *history.HistoryEvent, ts time.Time) spanDatum {
+	sd := spanDatum{id: event.GetEventId(), ts: ts, eventType: event.GetEventType().String()}
+
+	if attr := event.GetActivityTaskScheduledEventAttributes(); attr != nil {
+		sd.name = attr.ActivityType.GetName()
+	} else if attr := event.GetActivityTaskCompletedEventAttributes(); attr != nil {
+		sd.scheduledEventID = attr.GetScheduledEventId()
+	} else if attr := event.GetActivityTaskFailedEventAttributes(); attr != nil {
+		sd.scheduledEventID = attr.GetScheduledEventId()
+	} else if attr := event.GetActivityTaskTimedOutEventAttributes(); attr != nil {
+		sd.scheduledEventID = attr.GetScheduledEventId()
+	} else if attr := event.GetActivityTaskCanceledEventAttributes(); attr != nil {
+		sd.scheduledEventID = attr.GetScheduledEventId()
+	} else if attr := event.GetStartChildWorkflowExecutionInitiatedEventAttributes(); attr != nil {
+		sd.name = attr.WorkflowType.GetName()
+	} else if attr := event.GetChildWorkflowExecutionCompletedEventAttributes(); attr != nil {
+		sd.initiatedEventID = attr.GetInitiatedEventId()
+	} else if attr := event.GetChildWorkflowExecutionFailedEventAttributes(); attr != nil {
+		sd.initiatedEventID = attr.GetInitiatedEventId()
+	} else if attr := event.GetChildWorkflowExecutionTimedOutEventAttributes(); attr != nil {
+		sd.initiatedEventID = attr.GetInitiatedEventId()
+	} else if attr := event.GetChildWorkflowExecutionTerminatedEventAttributes(); attr != nil {
+		sd.initiatedEventID = attr.GetInitiatedEventId()
+	} else if attr := event.GetChildWorkflowExecutionCanceledEventAttributes(); attr != nil {
+		sd.initiatedEventID = attr.GetInitiatedEventId()
+	} else if attr := event.GetTimerStartedEventAttributes(); attr != nil {
+		sd.timerID = attr.GetTimerId()
+	} else if attr := event.GetTimerFiredEventAttributes(); attr != nil {
+		sd.timerID = attr.GetTimerId()
+	} else if attr := event.GetWorkflowTaskScheduledEventAttributes(); attr != nil {
+		sd.name = "WorkflowTask"
+	} else if attr := event.GetWorkflowTaskCompletedEventAttributes(); attr != nil {
+		sd.scheduledEventID = attr.GetScheduledEventId()
+	}
+
+	return sd
+}
+
+func buildTimeline(data []spanDatum) []TimelineSpan {
+	activityStarts := map[int64]*spanDatum{}
+	childWfStarts := map[int64]*spanDatum{}
+	timerStarts := map[string]*spanDatum{}
+	wfTaskStarts := map[int64]*spanDatum{}
+
+	for _, d := range data {
+		switch d.eventType {
+		case "ActivityTaskScheduled":
+			copy := d
+			activityStarts[d.id] = &copy
+		case "StartChildWorkflowExecutionInitiated":
+			copy := d
+			childWfStarts[d.id] = &copy
+		case "TimerStarted":
+			copy := d
+			timerStarts[d.timerID] = &copy
+		case "WorkflowTaskScheduled":
+			copy := d
+			wfTaskStarts[d.id] = &copy
+		}
+	}
+
+	var spans []TimelineSpan
+
+	for _, d := range data {
+		switch d.eventType {
+		case "ActivityTaskCompleted", "ActivityTaskFailed", "ActivityTaskTimedOut", "ActivityTaskCanceled":
+			if start, ok := activityStarts[d.scheduledEventID]; ok {
+				spans = append(spans, makeSpan(start, &d, "activity"))
+			}
+		case "ChildWorkflowExecutionCompleted", "ChildWorkflowExecutionFailed",
+			"ChildWorkflowExecutionTimedOut", "ChildWorkflowExecutionTerminated",
+			"ChildWorkflowExecutionCanceled":
+			if start, ok := childWfStarts[d.initiatedEventID]; ok {
+				spans = append(spans, makeSpan(start, &d, "child_workflow"))
+			}
+		case "TimerFired":
+			if start, ok := timerStarts[d.timerID]; ok {
+				spans = append(spans, makeSpan(start, &d, "timer"))
+			}
+		case "WorkflowTaskCompleted":
+			if start, ok := wfTaskStarts[d.scheduledEventID]; ok {
+				spans = append(spans, makeSpan(start, &d, "workflow_task"))
+			}
+		}
+	}
+
+	return spans
+}
+
+func makeSpan(start, end *spanDatum, spanType string) TimelineSpan {
+	return TimelineSpan{
+		ID:           fmt.Sprintf("%s-%d-%d", spanType, start.id, end.id),
+		Name:         start.name,
+		Type:         spanType,
+		StartTime:    start.ts.Format(time.RFC3339),
+		EndTime:      end.ts.Format(time.RFC3339),
+		StartEventID: start.id,
+		EndEventID:   end.id,
 	}
 }
 
