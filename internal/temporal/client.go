@@ -3,6 +3,7 @@ package temporal
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -285,6 +286,7 @@ func (c *Client) GetWorkflowHistory(ctx context.Context, workflowID, runID strin
 				delete(raw, "eventTime")
 				delete(raw, "version")
 				delete(raw, "taskId")
+				decodeHistoryPayloads(raw)
 				he.Details = raw
 			}
 		}
@@ -372,6 +374,48 @@ func summarizeEvent(event *history.HistoryEvent) string {
 		return "Workflow task completed"
 	default:
 		return event.GetEventType().String()
+	}
+}
+
+func decodeHistoryPayloads(v interface{}) {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		if data, ok := val["data"].(string); ok {
+			if meta, ok := val["metadata"].(map[string]interface{}); ok {
+				if encStr, ok := meta["encoding"].(string); ok {
+					encBytes, _ := base64.StdEncoding.DecodeString(encStr)
+					encoding := string(encBytes)
+					dataBytes, _ := base64.StdEncoding.DecodeString(data)
+					if encoding == "json/plain" {
+						var decoded interface{}
+						if json.Unmarshal(dataBytes, &decoded) == nil {
+							decodeHistoryPayloads(decoded)
+							for k := range val {
+								delete(val, k)
+							}
+							if m, ok := decoded.(map[string]interface{}); ok {
+								for k, v := range m {
+									val[k] = v
+								}
+							}
+							return
+						}
+					}
+				}
+			}
+		}
+		if payloads, ok := val["payloads"].([]interface{}); ok {
+			for _, p := range payloads {
+				decodeHistoryPayloads(p)
+			}
+		}
+		for _, child := range val {
+			decodeHistoryPayloads(child)
+		}
+	case []interface{}:
+		for _, item := range val {
+			decodeHistoryPayloads(item)
+		}
 	}
 }
 
