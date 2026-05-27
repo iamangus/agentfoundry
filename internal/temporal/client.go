@@ -3,6 +3,7 @@ package temporal
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,6 +18,7 @@ import (
 	"go.temporal.io/api/operatorservice/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 const (
@@ -273,6 +275,18 @@ func (c *Client) GetWorkflowHistory(ctx context.Context, workflowID, runID strin
 			EventType: eventType,
 			EventTime: eventTime,
 			Summary:   summarizeEvent(event),
+		}
+
+		if b, err := protojson.Marshal(event); err == nil {
+			var raw map[string]interface{}
+			if json.Unmarshal(b, &raw) == nil {
+				delete(raw, "eventId")
+				delete(raw, "eventType")
+				delete(raw, "eventTime")
+				delete(raw, "version")
+				delete(raw, "taskId")
+				he.Details = raw
+			}
 		}
 
 		if firstEvent {
