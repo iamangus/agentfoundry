@@ -258,10 +258,10 @@ func (c *Client) ListWorkflows(ctx context.Context, query string, pageSize int32
 		}
 		if attrs := exec.GetSearchAttributes().GetIndexedFields(); attrs != nil {
 			if v, ok := attrs["AgentName"]; ok {
-				info.AgentName = string(v.GetData())
+				info.AgentName = decodePayloadString(v.GetData())
 			}
 			if v, ok := attrs["RunType"]; ok {
-				info.RunType = string(v.GetData())
+				info.RunType = decodePayloadString(v.GetData())
 			}
 		}
 		execs = append(execs, info)
@@ -319,10 +319,10 @@ func (c *Client) GetWorkflowHistory(ctx context.Context, workflowID, runID strin
 			if wfStarted := event.GetWorkflowExecutionStartedEventAttributes(); wfStarted != nil {
 				if sa := wfStarted.GetSearchAttributes().GetIndexedFields(); sa != nil {
 					if v, ok := sa["AgentName"]; ok {
-						detail.AgentName = string(v.GetData())
+						detail.AgentName = decodePayloadString(v.GetData())
 					}
 					if v, ok := sa["RunType"]; ok {
-						detail.RunType = string(v.GetData())
+						detail.RunType = decodePayloadString(v.GetData())
 					}
 				}
 			}
@@ -548,6 +548,14 @@ func makeSpan(start, end *spanDatum, spanType string) TimelineSpan {
 
 func (c *Client) Close() {
 	c.c.Close()
+}
+
+func decodePayloadString(data []byte) string {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return string(data)
+	}
+	return s
 }
 
 func randomID() string {

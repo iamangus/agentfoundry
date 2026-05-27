@@ -1074,16 +1074,31 @@ func (h *Handler) listTeams(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) listExecutions(w http.ResponseWriter, r *http.Request) {
 	ac := auth.FromContext(r)
 
+	agent := r.URL.Query().Get("agent_name")
 	query := fmt.Sprintf("WorkflowType = '%s'", temporal.WorkflowType)
 	if status := r.URL.Query().Get("status"); status != "" {
 		query += fmt.Sprintf(" AND ExecutionStatus = '%s'", status)
 	}
-	if agent := r.URL.Query().Get("agent_name"); agent != "" {
+	if agent != "" {
 		if !h.agentVisible(ac, agent) {
 			writeJSON(w, http.StatusOK, []temporal.ExecutionInfo{})
 			return
 		}
 		query += fmt.Sprintf(" AND AgentName = '%s'", agent)
+	}
+
+	isGlobalAdmin := ac != nil && ac.IsGlobalAdmin
+	if !isGlobalAdmin && agent == "" {
+		visibleAgents := h.visibleAgentNames(ac)
+		if len(visibleAgents) == 0 {
+			writeJSON(w, http.StatusOK, []temporal.ExecutionInfo{})
+			return
+		}
+		var parts []string
+		for name := range visibleAgents {
+			parts = append(parts, "AgentName = '"+name+"'")
+		}
+		query += " AND (" + strings.Join(parts, " OR ") + ")"
 	}
 
 	execs, err := h.temporal.ListWorkflows(r.Context(), query, 100)
@@ -1093,21 +1108,7 @@ func (h *Handler) listExecutions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if ac != nil && ac.IsGlobalAdmin {
-		writeJSON(w, http.StatusOK, execs)
-		return
-	}
-
-	visibleAgents := h.visibleAgentNames(ac)
-
-	var filtered []temporal.ExecutionInfo
-	for _, e := range execs {
-		if visibleAgents[e.AgentName] {
-			filtered = append(filtered, e)
-		}
-	}
-
-	writeJSON(w, http.StatusOK, filtered)
+	writeJSON(w, http.StatusOK, execs)
 }
 
 func (h *Handler) getExecution(w http.ResponseWriter, r *http.Request) {

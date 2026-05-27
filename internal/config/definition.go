@@ -177,16 +177,7 @@ func (d *Definition) CanEdit(subject string, teams []string, isGlobalAdmin, isTe
 	case ScopeGlobal:
 		return false
 	case ScopeTeam:
-		if !d.IsMemberOfTeam(teams) {
-			return false
-		}
-		if d.CreatedBy == subject {
-			return true
-		}
-		if isTeamAdmin {
-			return true
-		}
-		return false
+		return d.IsMemberOfTeam(teams)
 	case ScopeUser, "":
 		return d.CreatedBy == subject
 	}

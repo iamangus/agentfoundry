@@ -199,18 +199,10 @@ func TestDefinition_CanEdit(t *testing.T) {
 			canEdit: false,
 		},
 		{
-			name:    "team agent editable by creator",
-			def:     config.Definition{Scope: "team", Team: "eng", CreatedBy: "u1"},
-			subject: "u1",
-			teams:   []string{"eng"},
-			canEdit: true,
-		},
-		{
-			name:    "team agent editable by team admin",
+			name:    "team agent editable by any team member",
 			def:     config.Definition{Scope: "team", Team: "eng", CreatedBy: "u2"},
 			subject: "u1",
 			teams:   []string{"eng"},
-			isTA:    true,
 			canEdit: true,
 		},
 		{
