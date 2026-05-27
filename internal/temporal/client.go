@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/angoo/agentfoundry/internal/config"
@@ -288,6 +289,9 @@ func (c *Client) GetWorkflowHistory(ctx context.Context, workflowID, runID strin
 		}
 
 		eventType := event.GetEventType().String()
+		if strings.HasPrefix(eventType, "WorkflowTask") {
+			continue
+		}
 		var eventTs time.Time
 		eventTime := ""
 		if ts := event.GetEventTime(); ts != nil {
@@ -474,10 +478,6 @@ func collectSpanDatum(event *history.HistoryEvent, ts time.Time) spanDatum {
 		sd.timerID = attr.GetTimerId()
 	} else if attr := event.GetTimerFiredEventAttributes(); attr != nil {
 		sd.timerID = attr.GetTimerId()
-	} else if attr := event.GetWorkflowTaskScheduledEventAttributes(); attr != nil {
-		sd.name = "WorkflowTask"
-	} else if attr := event.GetWorkflowTaskCompletedEventAttributes(); attr != nil {
-		sd.scheduledEventID = attr.GetScheduledEventId()
 	}
 
 	return sd
@@ -487,7 +487,6 @@ func buildTimeline(data []spanDatum) []TimelineSpan {
 	activityStarts := map[int64]*spanDatum{}
 	childWfStarts := map[int64]*spanDatum{}
 	timerStarts := map[string]*spanDatum{}
-	wfTaskStarts := map[int64]*spanDatum{}
 
 	for _, d := range data {
 		switch d.eventType {
@@ -500,9 +499,6 @@ func buildTimeline(data []spanDatum) []TimelineSpan {
 		case "TimerStarted":
 			copy := d
 			timerStarts[d.timerID] = &copy
-		case "WorkflowTaskScheduled":
-			copy := d
-			wfTaskStarts[d.id] = &copy
 		}
 	}
 
@@ -523,10 +519,6 @@ func buildTimeline(data []spanDatum) []TimelineSpan {
 		case "TimerFired":
 			if start, ok := timerStarts[d.timerID]; ok {
 				spans = append(spans, makeSpan(start, &d, "timer"))
-			}
-		case "WorkflowTaskCompleted":
-			if start, ok := wfTaskStarts[d.scheduledEventID]; ok {
-				spans = append(spans, makeSpan(start, &d, "workflow_task"))
 			}
 		}
 	}
