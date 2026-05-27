@@ -292,7 +292,7 @@ func (c *Client) GetWorkflowHistory(ctx context.Context, workflowID, runID strin
 		eventTime := ""
 		if ts := event.GetEventTime(); ts != nil {
 			eventTs = ts.AsTime()
-			eventTime = eventTs.Format(time.RFC3339)
+			eventTime = eventTs.Format(time.RFC3339Nano)
 		}
 
 		he := HistoryEvent{
@@ -539,8 +539,8 @@ func makeSpan(start, end *spanDatum, spanType string) TimelineSpan {
 		ID:           fmt.Sprintf("%s-%d-%d", spanType, start.id, end.id),
 		Name:         start.name,
 		Type:         spanType,
-		StartTime:    start.ts.Format(time.RFC3339),
-		EndTime:      end.ts.Format(time.RFC3339),
+		StartTime:    start.ts.Format(time.RFC3339Nano),
+		EndTime:      end.ts.Format(time.RFC3339Nano),
 		StartEventID: start.id,
 		EndEventID:   end.id,
 	}
