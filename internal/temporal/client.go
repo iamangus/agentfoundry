@@ -509,18 +509,31 @@ func buildTimeline(data []spanDatum) []TimelineSpan {
 		case "ActivityTaskCompleted", "ActivityTaskFailed", "ActivityTaskTimedOut", "ActivityTaskCanceled":
 			if start, ok := activityStarts[d.scheduledEventID]; ok {
 				spans = append(spans, makeSpan(start, &d, "activity"))
+				delete(activityStarts, d.scheduledEventID)
 			}
 		case "ChildWorkflowExecutionCompleted", "ChildWorkflowExecutionFailed",
 			"ChildWorkflowExecutionTimedOut", "ChildWorkflowExecutionTerminated",
 			"ChildWorkflowExecutionCanceled":
 			if start, ok := childWfStarts[d.initiatedEventID]; ok {
 				spans = append(spans, makeSpan(start, &d, "child_workflow"))
+				delete(childWfStarts, d.initiatedEventID)
 			}
 		case "TimerFired":
 			if start, ok := timerStarts[d.timerID]; ok {
 				spans = append(spans, makeSpan(start, &d, "timer"))
+				delete(timerStarts, d.timerID)
 			}
 		}
+	}
+
+	for _, start := range activityStarts {
+		spans = append(spans, openSpan(start, "activity"))
+	}
+	for _, start := range childWfStarts {
+		spans = append(spans, openSpan(start, "child_workflow"))
+	}
+	for _, start := range timerStarts {
+		spans = append(spans, openSpan(start, "timer"))
 	}
 
 	return spans
@@ -535,6 +548,16 @@ func makeSpan(start, end *spanDatum, spanType string) TimelineSpan {
 		EndTime:      end.ts.Format(time.RFC3339Nano),
 		StartEventID: start.id,
 		EndEventID:   end.id,
+	}
+}
+
+func openSpan(start *spanDatum, spanType string) TimelineSpan {
+	return TimelineSpan{
+		ID:           fmt.Sprintf("%s-%d-open", spanType, start.id),
+		Name:         start.name,
+		Type:         spanType,
+		StartTime:    start.ts.Format(time.RFC3339Nano),
+		StartEventID: start.id,
 	}
 }
 
