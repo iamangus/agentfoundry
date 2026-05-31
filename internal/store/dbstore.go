@@ -32,7 +32,8 @@ func NewDBStore(pool *pgxpool.Pool, reg AgentRegistrar) *DBStore {
 
 func (s *DBStore) LoadAll(ctx context.Context) error {
 	rows, err := s.pool.Query(ctx, `SELECT agent_id, name, kind, description, model, system_prompt, tools,
-			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id
+			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id,
+			memory_enabled, memory_search_agent_id, memory_ingest_agent_id
 			FROM agent_definitions ORDER BY name`)
 	if err != nil {
 		return fmt.Errorf("query agent definitions: %w", err)
@@ -57,10 +58,14 @@ func (s *DBStore) LoadAll(ctx context.Context) error {
 			Team               string
 			CreatedBy          string
 			ProviderID         string
+			MemoryEnabled      bool
+			MemorySearchAgentID string
+			MemoryIngestAgentID string
 		}
 		if err := rows.Scan(&row.AgentID, &row.Name, &row.Kind, &row.Description, &row.Model,
 			&row.SystemPrompt, &row.Tools, &row.MaxTurns, &row.MaxConcurrentTools, &row.ForceJSON,
-			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID); err != nil {
+			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID,
+			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID); err != nil {
 			slog.Error("failed to scan agent definition row", "error", err)
 			continue
 		}
@@ -79,6 +84,9 @@ func (s *DBStore) LoadAll(ctx context.Context) error {
 			Team:               row.Team,
 			CreatedBy:          row.CreatedBy,
 			ProviderID:         row.ProviderID,
+			MemoryEnabled:        row.MemoryEnabled,
+			MemorySearchAgentID:  row.MemorySearchAgentID,
+			MemoryIngestAgentID:  row.MemoryIngestAgentID,
 		}
 
 		if len(row.Tools) > 0 {
@@ -140,8 +148,8 @@ func (s *DBStore) SaveDefinition(def *config.Definition) error {
 		INSERT INTO agent_definitions
 			(agent_id, name, kind, description, model, system_prompt, tools,
 			 max_turns, max_concurrent_tools, force_json, structured_output,
-			 scope, team, created_by, provider_id, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
+			 scope, team, created_by, provider_id, memory_enabled, memory_search_agent_id, memory_ingest_agent_id, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
 		ON CONFLICT (name) DO UPDATE SET
 			description         = EXCLUDED.description,
 			model               = EXCLUDED.model,
@@ -154,10 +162,14 @@ func (s *DBStore) SaveDefinition(def *config.Definition) error {
 			scope               = EXCLUDED.scope,
 			team                = EXCLUDED.team,
 			provider_id         = EXCLUDED.provider_id,
+			memory_enabled         = EXCLUDED.memory_enabled,
+			memory_search_agent_id = EXCLUDED.memory_search_agent_id,
+			memory_ingest_agent_id = EXCLUDED.memory_ingest_agent_id,
 			updated_at          = NOW()
 	`, def.AgentID, def.Name, string(def.Kind), def.Description, def.Model,
 		def.SystemPrompt, toolsJSON, def.MaxTurns, def.MaxConcurrentTools,
 		def.ForceJSON, soJSON, def.Scope, def.Team, def.CreatedBy, def.ProviderID,
+		def.MemoryEnabled, def.MemorySearchAgentID, def.MemoryIngestAgentID,
 	)
 	if err != nil {
 		return fmt.Errorf("save agent definition: %w", err)
@@ -200,14 +212,19 @@ func (s *DBStore) GetDefinition(name string) *config.Definition {
 		Team               string
 		CreatedBy          string
 		ProviderID         string
+		MemoryEnabled        bool
+		MemorySearchAgentID  string
+		MemoryIngestAgentID  string
 	}
 	err := s.pool.QueryRow(ctx, `
 		SELECT agent_id, name, kind, description, model, system_prompt, tools,
-			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id
+			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id,
+			memory_enabled, memory_search_agent_id, memory_ingest_agent_id
 		FROM agent_definitions WHERE name = $1`, name).
 		Scan(&row.AgentID, &row.Name, &row.Kind, &row.Description, &row.Model,
 			&row.SystemPrompt, &row.Tools, &row.MaxTurns, &row.MaxConcurrentTools, &row.ForceJSON,
-			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID)
+			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID,
+			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID)
 	if err != nil {
 		return nil
 	}
@@ -226,6 +243,9 @@ func (s *DBStore) GetDefinition(name string) *config.Definition {
 		Team:               row.Team,
 		CreatedBy:          row.CreatedBy,
 		ProviderID:         row.ProviderID,
+		MemoryEnabled:        row.MemoryEnabled,
+		MemorySearchAgentID:  row.MemorySearchAgentID,
+		MemoryIngestAgentID:  row.MemoryIngestAgentID,
 	}
 
 	if len(row.Tools) > 0 {
@@ -261,14 +281,19 @@ func (s *DBStore) GetDefinitionByID(agentID string) *config.Definition {
 		Team               string
 		CreatedBy          string
 		ProviderID         string
+		MemoryEnabled        bool
+		MemorySearchAgentID  string
+		MemoryIngestAgentID  string
 	}
 	err := s.pool.QueryRow(ctx, `
 		SELECT agent_id, name, kind, description, model, system_prompt, tools,
-			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id
+			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id,
+			memory_enabled, memory_search_agent_id, memory_ingest_agent_id
 		FROM agent_definitions WHERE agent_id = $1`, agentID).
 		Scan(&row.AgentID, &row.Name, &row.Kind, &row.Description, &row.Model,
 			&row.SystemPrompt, &row.Tools, &row.MaxTurns, &row.MaxConcurrentTools, &row.ForceJSON,
-			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID)
+			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID,
+			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID)
 	if err != nil {
 		return nil
 	}
@@ -287,6 +312,9 @@ func (s *DBStore) GetDefinitionByID(agentID string) *config.Definition {
 		Team:               row.Team,
 		CreatedBy:          row.CreatedBy,
 		ProviderID:         row.ProviderID,
+		MemoryEnabled:        row.MemoryEnabled,
+		MemorySearchAgentID:  row.MemorySearchAgentID,
+		MemoryIngestAgentID:  row.MemoryIngestAgentID,
 	}
 
 	if len(row.Tools) > 0 {
@@ -308,7 +336,8 @@ func (s *DBStore) ListDefinitions() []*config.Definition {
 
 	ctx := context.Background()
 	rows, err := s.pool.Query(ctx, `SELECT agent_id, name, kind, description, model, system_prompt, tools,
-		max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id
+		max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id,
+		memory_enabled, memory_search_agent_id, memory_ingest_agent_id
 		FROM agent_definitions ORDER BY name`)
 	if err != nil {
 		slog.Error("failed to list agent definitions", "error", err)
@@ -333,10 +362,14 @@ func (s *DBStore) ListDefinitions() []*config.Definition {
 			Team               string
 			CreatedBy          string
 			ProviderID         string
+			MemoryEnabled      bool
+			MemorySearchAgentID string
+			MemoryIngestAgentID string
 		}
 		if err := rows.Scan(&row.AgentID, &row.Name, &row.Kind, &row.Description, &row.Model,
 			&row.SystemPrompt, &row.Tools, &row.MaxTurns, &row.MaxConcurrentTools, &row.ForceJSON,
-			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID); err != nil {
+			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID,
+			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID); err != nil {
 			slog.Error("failed to scan agent definition row", "error", err)
 			continue
 		}
@@ -355,6 +388,9 @@ func (s *DBStore) ListDefinitions() []*config.Definition {
 			Team:               row.Team,
 			CreatedBy:          row.CreatedBy,
 			ProviderID:         row.ProviderID,
+			MemoryEnabled:        row.MemoryEnabled,
+			MemorySearchAgentID:  row.MemorySearchAgentID,
+			MemoryIngestAgentID:  row.MemoryIngestAgentID,
 		}
 
 		if len(row.Tools) > 0 {

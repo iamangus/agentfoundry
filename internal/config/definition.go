@@ -25,6 +25,9 @@ type Definition struct {
 	Scope              string            `yaml:"scope,omitempty" json:"scope,omitempty"`
 	Team               string            `yaml:"team,omitempty" json:"team,omitempty"`
 	CreatedBy          string            `yaml:"created_by,omitempty" json:"created_by,omitempty"`
+	MemoryEnabled        bool   `yaml:"memory_enabled,omitempty" json:"memory_enabled,omitempty"`
+	MemorySearchAgentID  string `yaml:"memory_search_agent_id,omitempty" json:"memory_search_agent_id,omitempty"`
+	MemoryIngestAgentID  string `yaml:"memory_ingest_agent_id,omitempty" json:"memory_ingest_agent_id,omitempty"`
 }
 
 // StructuredOutput configures JSON Schema constrained responses.

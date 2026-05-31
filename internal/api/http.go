@@ -549,6 +549,9 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 		MCPServers:     req.MCPServers,
 		ResponseSchema: req.ResponseSchema,
 		LLMConfig:      h.buildLLMConfig(r.Context(), def),
+		MemoryEnabled:       def.MemoryEnabled,
+		MemorySearchAgentID: def.MemorySearchAgentID,
+		MemoryIngestAgentID: def.MemoryIngestAgentID,
 	})
 	if err != nil {
 		for _, n := range ephemeralNames {
@@ -824,13 +827,15 @@ func (h *Handler) postChatMessage(w http.ResponseWriter, r *http.Request) {
 		}
 
 		agentResult, err := h.temporal.ExecuteWorkflowSync(ctx, temporal.RunAgentParams{
-			AgentID:    def.AgentID,
-			AgentName:  def.Name,
-			Message:    req.Message,
-			History:    history,
-			StreamID:   runID,
-			LLMConfig:  h.buildLLMConfig(ctx, def),
-		})
+			AgentID:       def.AgentID,
+			AgentName:     def.Name,
+			Message:       req.Message,
+			History:       history,
+			StreamID:      runID,
+			LLMConfig:     h.buildLLMConfig(ctx, def),
+		MemoryEnabled:       def.MemoryEnabled,
+		MemorySearchAgentID: def.MemorySearchAgentID,
+		MemoryIngestAgentID: def.MemoryIngestAgentID,		})
 		if err != nil {
 			slog.Error("agent run failed", "agent", sess.AgentID, "error", err)
 

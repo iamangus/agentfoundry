@@ -112,6 +112,9 @@ func (p *Pool) Migrate(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_agent_versions_agent_id ON agent_versions (agent_id, created_at DESC)`,
 
 		`ALTER TABLE agent_definitions ADD COLUMN IF NOT EXISTS provider_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE agent_definitions ADD COLUMN IF NOT EXISTS memory_enabled BOOLEAN NOT NULL DEFAULT false`,
+		`ALTER TABLE agent_definitions ADD COLUMN IF NOT EXISTS memory_search_agent_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE agent_definitions ADD COLUMN IF NOT EXISTS memory_ingest_agent_id TEXT NOT NULL DEFAULT ''`,
 
 		`CREATE TABLE IF NOT EXISTS inference_providers (
 			id                TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
