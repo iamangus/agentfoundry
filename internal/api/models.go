@@ -50,6 +50,7 @@ func (h *Handler) getModelCapabilities(w http.ResponseWriter, r *http.Request) {
 		var err error
 		prov, err = h.providerStore.GetByID(r.Context(), pid)
 		if err != nil {
+			slog.Error("model capabilities: provider not found", "provider_id", pid, "error", err)
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "provider not found"})
 			return
 		}
@@ -139,5 +140,6 @@ func (h *Handler) getModelCapabilities(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	slog.Error("model capabilities: model not found in provider list", "model", modelID)
 	writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("model %q not found", modelID)})
 }
