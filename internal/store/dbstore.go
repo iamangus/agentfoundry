@@ -33,7 +33,7 @@ func NewDBStore(pool *pgxpool.Pool, reg AgentRegistrar) *DBStore {
 func (s *DBStore) LoadAll(ctx context.Context) error {
 	rows, err := s.pool.Query(ctx, `SELECT agent_id, name, kind, description, model, system_prompt, tools,
 			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id,
-			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides
+			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params
 			FROM agent_definitions ORDER BY name`)
 	if err != nil {
 		return fmt.Errorf("query agent definitions: %w", err)
@@ -62,11 +62,12 @@ func (s *DBStore) LoadAll(ctx context.Context) error {
 			MemorySearchAgentID string
 			MemoryIngestAgentID string
 			ToolOverrides       []byte
+			ModelParams          []byte
 		}
 		if err := rows.Scan(&row.AgentID, &row.Name, &row.Kind, &row.Description, &row.Model,
 			&row.SystemPrompt, &row.Tools, &row.MaxTurns, &row.MaxConcurrentTools, &row.ForceJSON,
 			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID,
-			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides); err != nil {
+			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides, &row.ModelParams); err != nil {
 			slog.Error("failed to scan agent definition row", "error", err)
 			continue
 		}
@@ -89,6 +90,7 @@ func (s *DBStore) LoadAll(ctx context.Context) error {
 			MemorySearchAgentID:  row.MemorySearchAgentID,
 			MemoryIngestAgentID:  row.MemoryIngestAgentID,
 			ToolOverrides:        row.ToolOverrides,
+			ModelParams:          row.ModelParams,
 		}
 
 		if len(row.Tools) > 0 {
@@ -154,8 +156,8 @@ func (s *DBStore) SaveDefinition(def *config.Definition) error {
 		INSERT INTO agent_definitions
 			(agent_id, name, kind, description, model, system_prompt, tools,
 			 max_turns, max_concurrent_tools, force_json, structured_output,
-			 scope, team, created_by, provider_id, memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW())
+			 scope, team, created_by, provider_id, memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NOW())
 		ON CONFLICT (name) DO UPDATE SET
 			description         = EXCLUDED.description,
 			model               = EXCLUDED.model,
@@ -172,11 +174,12 @@ func (s *DBStore) SaveDefinition(def *config.Definition) error {
 			memory_search_agent_id = EXCLUDED.memory_search_agent_id,
 			memory_ingest_agent_id = EXCLUDED.memory_ingest_agent_id,
 			tool_overrides         = EXCLUDED.tool_overrides,
+			model_params           = EXCLUDED.model_params,
 			updated_at          = NOW()
 	`, def.AgentID, def.Name, string(def.Kind), def.Description, def.Model,
 		def.SystemPrompt, toolsJSON, def.MaxTurns, def.MaxConcurrentTools,
 		def.ForceJSON, soJSON, def.Scope, def.Team, def.CreatedBy, def.ProviderID,
-		def.MemoryEnabled, def.MemorySearchAgentID, def.MemoryIngestAgentID, def.ToolOverrides,
+		def.MemoryEnabled, def.MemorySearchAgentID, def.MemoryIngestAgentID, def.ToolOverrides, def.ModelParams,
 	)
 	if err != nil {
 		return fmt.Errorf("save agent definition: %w", err)
@@ -223,16 +226,17 @@ func (s *DBStore) GetDefinition(name string) *config.Definition {
 		MemorySearchAgentID  string
 		MemoryIngestAgentID  string
 		ToolOverrides        []byte
+		ModelParams          []byte
 	}
 	err := s.pool.QueryRow(ctx, `
 		SELECT agent_id, name, kind, description, model, system_prompt, tools,
 			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id,
-			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides
+			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params
 		FROM agent_definitions WHERE name = $1`, name).
 		Scan(&row.AgentID, &row.Name, &row.Kind, &row.Description, &row.Model,
 			&row.SystemPrompt, &row.Tools, &row.MaxTurns, &row.MaxConcurrentTools, &row.ForceJSON,
 			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID,
-			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides)
+			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides, &row.ModelParams)
 	if err != nil {
 		return nil
 	}
@@ -255,6 +259,7 @@ func (s *DBStore) GetDefinition(name string) *config.Definition {
 		MemorySearchAgentID:  row.MemorySearchAgentID,
 		MemoryIngestAgentID:  row.MemoryIngestAgentID,
 		ToolOverrides:        row.ToolOverrides,
+		ModelParams:          row.ModelParams,
 	}
 
 	if len(row.Tools) > 0 {
@@ -294,16 +299,17 @@ func (s *DBStore) GetDefinitionByID(agentID string) *config.Definition {
 		MemorySearchAgentID  string
 		MemoryIngestAgentID  string
 		ToolOverrides        []byte
+		ModelParams          []byte
 	}
 	err := s.pool.QueryRow(ctx, `
 		SELECT agent_id, name, kind, description, model, system_prompt, tools,
 			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id,
-			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides
+			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params
 		FROM agent_definitions WHERE agent_id = $1`, agentID).
 		Scan(&row.AgentID, &row.Name, &row.Kind, &row.Description, &row.Model,
 			&row.SystemPrompt, &row.Tools, &row.MaxTurns, &row.MaxConcurrentTools, &row.ForceJSON,
 			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID,
-			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides)
+			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides, &row.ModelParams)
 	if err != nil {
 		return nil
 	}
@@ -326,6 +332,7 @@ func (s *DBStore) GetDefinitionByID(agentID string) *config.Definition {
 		MemorySearchAgentID:  row.MemorySearchAgentID,
 		MemoryIngestAgentID:  row.MemoryIngestAgentID,
 		ToolOverrides:        row.ToolOverrides,
+		ModelParams:          row.ModelParams,
 	}
 
 	if len(row.Tools) > 0 {
@@ -347,9 +354,9 @@ func (s *DBStore) ListDefinitions() []*config.Definition {
 
 	ctx := context.Background()
 	rows, err := s.pool.Query(ctx, `SELECT agent_id, name, kind, description, model, system_prompt, tools,
-		max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id,
-		memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides
-		FROM agent_definitions ORDER BY name`)
+			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id,
+			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params
+			FROM agent_definitions ORDER BY name`)
 	if err != nil {
 		slog.Error("failed to list agent definitions", "error", err)
 		return defs
@@ -377,11 +384,12 @@ func (s *DBStore) ListDefinitions() []*config.Definition {
 			MemorySearchAgentID string
 			MemoryIngestAgentID string
 			ToolOverrides       []byte
+			ModelParams          []byte
 		}
 		if err := rows.Scan(&row.AgentID, &row.Name, &row.Kind, &row.Description, &row.Model,
 			&row.SystemPrompt, &row.Tools, &row.MaxTurns, &row.MaxConcurrentTools, &row.ForceJSON,
 			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID,
-			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides); err != nil {
+			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides, &row.ModelParams); err != nil {
 			slog.Error("failed to scan agent definition row", "error", err)
 			continue
 		}
@@ -404,6 +412,7 @@ func (s *DBStore) ListDefinitions() []*config.Definition {
 			MemorySearchAgentID:  row.MemorySearchAgentID,
 			MemoryIngestAgentID:  row.MemoryIngestAgentID,
 			ToolOverrides:        row.ToolOverrides,
+			ModelParams:          row.ModelParams,
 		}
 
 		if len(row.Tools) > 0 {
