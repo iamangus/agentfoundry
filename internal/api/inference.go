@@ -86,7 +86,7 @@ func (h *Handler) inferenceProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bodyBytes = mergeInferenceParams(bodyBytes, def.ModelParams, prov.Reasoning)
+	bodyBytes = mergeInferenceParams(bodyBytes, prov.Reasoning, def.ModelParams)
 
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, targetURL, bytes.NewReader(bodyBytes))
 	if err != nil {
