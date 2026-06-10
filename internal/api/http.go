@@ -674,8 +674,6 @@ func (h *Handler) buildLLMConfig(ctx context.Context, def *config.Definition) *t
 	}
 	return &temporal.LLMConfigInput{
 		SchemaValidation: prov.SchemaValidation,
-		Reasoning:        prov.Reasoning,
-		ModelParams:      def.ModelParams,
 	}
 }
 

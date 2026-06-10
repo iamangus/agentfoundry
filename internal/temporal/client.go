@@ -29,9 +29,7 @@ const (
 )
 
 type LLMConfigInput struct {
-	SchemaValidation bool            `json:"schema_validation"`
-	Reasoning        json.RawMessage `json:"reasoning,omitempty"`
-	ModelParams      json.RawMessage `json:"model_params,omitempty"`
+	SchemaValidation bool `json:"schema_validation"`
 }
 
 type RunAgentParams struct {

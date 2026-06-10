@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -77,7 +78,17 @@ func (h *Handler) inferenceProxy(w http.ResponseWriter, r *http.Request) {
 	baseURL := strings.TrimRight(prov.BaseURL, "/")
 	targetURL := baseURL + "/chat/completions"
 
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, targetURL, r.Body)
+	bodyBytes, err := io.ReadAll(r.Body)
+	r.Body.Close()
+	if err != nil {
+		slog.Error("failed to read request body", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to read request"})
+		return
+	}
+
+	bodyBytes = mergeInferenceParams(bodyBytes, def.ModelParams, prov.Reasoning)
+
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, targetURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		slog.Error("failed to create proxy request", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "proxy error"})
@@ -189,4 +200,32 @@ func (h *Handler) inferenceProxy(w http.ResponseWriter, r *http.Request) {
 	} else {
 		io.Copy(w, resp.Body)
 	}
+}
+
+func isNonEmptyJSON(raw json.RawMessage) bool {
+	return len(raw) > 0 && !bytes.Equal(raw, []byte("{}")) && !bytes.Equal(raw, []byte("null"))
+}
+
+func mergeInferenceParams(body []byte, extras ...json.RawMessage) []byte {
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		return body
+	}
+	for _, extra := range extras {
+		if !isNonEmptyJSON(extra) {
+			continue
+		}
+		var e map[string]any
+		if err := json.Unmarshal(extra, &e); err != nil {
+			continue
+		}
+		for k, v := range e {
+			m[k] = v
+		}
+	}
+	merged, err := json.Marshal(m)
+	if err != nil {
+		return body
+	}
+	return merged
 }
