@@ -38,12 +38,28 @@ type modelCapabilitiesResponse struct {
 	DefaultParameters   json.RawMessage   `json:"default_parameters"`
 }
 
+var orSuffixes = []string{":nitro", ":free", ":floor", ":online", ":thinking", ":extended", ":exacto"}
+
+func stripORSuffix(modelID string) string {
+	for {
+		stripped := modelID
+		for _, sfx := range orSuffixes {
+			stripped = strings.TrimSuffix(stripped, sfx)
+		}
+		if stripped == modelID {
+			return stripped
+		}
+		modelID = stripped
+	}
+}
+
 func (h *Handler) getModelCapabilities(w http.ResponseWriter, r *http.Request) {
 	modelID := r.URL.Query().Get("model")
 	if modelID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "model is required"})
 		return
 	}
+	modelID = stripORSuffix(modelID)
 
 	var prov *store.ProviderRecord
 	if pid := r.URL.Query().Get("provider_id"); pid != "" {
