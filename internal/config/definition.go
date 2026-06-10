@@ -25,9 +25,11 @@ type Definition struct {
 	Scope              string            `yaml:"scope,omitempty" json:"scope,omitempty"`
 	Team               string            `yaml:"team,omitempty" json:"team,omitempty"`
 	CreatedBy          string            `yaml:"created_by,omitempty" json:"created_by,omitempty"`
-	MemoryEnabled        bool   `yaml:"memory_enabled,omitempty" json:"memory_enabled,omitempty"`
-	MemorySearchAgentID  string `yaml:"memory_search_agent_id,omitempty" json:"memory_search_agent_id,omitempty"`
-	MemoryIngestAgentID  string `yaml:"memory_ingest_agent_id,omitempty" json:"memory_ingest_agent_id,omitempty"`
+	MemoryEnabled        bool            `yaml:"memory_enabled,omitempty" json:"memory_enabled,omitempty"`
+	MemorySearchAgentID  string          `yaml:"memory_search_agent_id,omitempty" json:"memory_search_agent_id,omitempty"`
+	MemoryIngestAgentID  string          `yaml:"memory_ingest_agent_id,omitempty" json:"memory_ingest_agent_id,omitempty"`
+	ToolOverrides        json.RawMessage `yaml:"tool_overrides,omitempty" json:"tool_overrides,omitempty"`
+	ModelParams          json.RawMessage `yaml:"model_params,omitempty" json:"model_params,omitempty"`
 }
 
 // StructuredOutput configures JSON Schema constrained responses.

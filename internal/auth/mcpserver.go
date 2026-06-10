@@ -16,16 +16,17 @@ var ErrMCPServerNotFound = errors.New("mcp server not found")
 var ErrMCPServerNameTaken = errors.New("mcp server name already taken")
 
 type MCPServerRecord struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	URL       string            `json:"url"`
-	Transport string            `json:"transport"`
-	Headers   map[string]string `json:"headers"`
-	Scope     string            `json:"scope"`
-	Team      string            `json:"team,omitempty"`
-	CreatedBy string            `json:"created_by"`
-	CreatedAt time.Time         `json:"created_at"`
-	UpdatedAt time.Time         `json:"updated_at"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	URL           string            `json:"url"`
+	Transport     string            `json:"transport"`
+	Headers       map[string]string `json:"headers"`
+	Scope         string            `json:"scope"`
+	Team          string            `json:"team,omitempty"`
+	CreatedBy     string            `json:"created_by"`
+	CreatedAt     time.Time         `json:"created_at"`
+	UpdatedAt     time.Time         `json:"updated_at"`
+	ToolOverrides json.RawMessage   `json:"tool_overrides,omitempty"`
 }
 
 type ToolScopeEntry struct {
@@ -49,14 +50,16 @@ func (s *MCPServerStore) Create(ctx context.Context, name, url, transport, scope
 	if err != nil {
 		return nil, fmt.Errorf("marshal headers: %w", err)
 	}
+	emptyOverrides := json.RawMessage("{}")
 
 	var rec MCPServerRecord
 	var updatedAt time.Time
+	var toolOverridesJSON json.RawMessage
 
 	err = s.db.QueryRow(ctx,
-		`INSERT INTO mcp_servers (name, url, transport, headers, scope, team, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, name, url, transport, headers, scope, team, created_by, created_at, updated_at`,
-		name, url, transport, headersJSON, scope, team, createdBy,
-	).Scan(&rec.ID, &rec.Name, &rec.URL, &rec.Transport, &headersJSON, &rec.Scope, &rec.Team, &rec.CreatedBy, &rec.CreatedAt, &updatedAt)
+		`INSERT INTO mcp_servers (name, url, transport, headers, scope, team, created_by, tool_overrides) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, name, url, transport, headers, scope, team, created_by, created_at, updated_at, tool_overrides`,
+		name, url, transport, headersJSON, scope, team, createdBy, emptyOverrides,
+	).Scan(&rec.ID, &rec.Name, &rec.URL, &rec.Transport, &headersJSON, &rec.Scope, &rec.Team, &rec.CreatedBy, &rec.CreatedAt, &updatedAt, &toolOverridesJSON)
 	if err != nil {
 		if isPgUniqueViolation(err) {
 			return nil, ErrMCPServerNameTaken
@@ -66,18 +69,20 @@ func (s *MCPServerStore) Create(ctx context.Context, name, url, transport, scope
 
 	rec.UpdatedAt = updatedAt
 	_ = json.Unmarshal(headersJSON, &rec.Headers)
+	rec.ToolOverrides = toolOverridesJSON
 	return &rec, nil
 }
 
 func (s *MCPServerStore) GetByName(ctx context.Context, name string) (*MCPServerRecord, error) {
 	var rec MCPServerRecord
 	var headersJSON []byte
+	var toolOverridesJSON []byte
 	var team *string
 
 	err := s.db.QueryRow(ctx,
-		`SELECT id, name, url, transport, headers, scope, team, created_by, created_at, updated_at FROM mcp_servers WHERE name = $1`,
+		`SELECT id, name, url, transport, headers, scope, team, created_by, created_at, updated_at, tool_overrides FROM mcp_servers WHERE name = $1`,
 		name,
-	).Scan(&rec.ID, &rec.Name, &rec.URL, &rec.Transport, &headersJSON, &rec.Scope, &team, &rec.CreatedBy, &rec.CreatedAt, &rec.UpdatedAt)
+	).Scan(&rec.ID, &rec.Name, &rec.URL, &rec.Transport, &headersJSON, &rec.Scope, &team, &rec.CreatedBy, &rec.CreatedAt, &rec.UpdatedAt, &toolOverridesJSON)
 	if err == pgx.ErrNoRows {
 		return nil, ErrMCPServerNotFound
 	}
@@ -92,12 +97,13 @@ func (s *MCPServerStore) GetByName(ctx context.Context, name string) (*MCPServer
 	if rec.Headers == nil {
 		rec.Headers = map[string]string{}
 	}
+	rec.ToolOverrides = toolOverridesJSON
 	return &rec, nil
 }
 
 func (s *MCPServerStore) List(ctx context.Context, subject string, teams []string, isGlobalAdmin bool) ([]MCPServerRecord, error) {
 	rows, err := s.db.Query(ctx,
-		`SELECT id, name, url, transport, headers, scope, team, created_by, created_at, updated_at FROM mcp_servers ORDER BY name ASC`,
+		`SELECT id, name, url, transport, headers, scope, team, created_by, created_at, updated_at, tool_overrides FROM mcp_servers ORDER BY name ASC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list mcp servers: %w", err)
@@ -108,9 +114,10 @@ func (s *MCPServerStore) List(ctx context.Context, subject string, teams []strin
 	for rows.Next() {
 		var rec MCPServerRecord
 		var headersJSON []byte
+		var toolOverridesJSON []byte
 		var team *string
 
-		if err := rows.Scan(&rec.ID, &rec.Name, &rec.URL, &rec.Transport, &headersJSON, &rec.Scope, &team, &rec.CreatedBy, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.Name, &rec.URL, &rec.Transport, &headersJSON, &rec.Scope, &team, &rec.CreatedBy, &rec.CreatedAt, &rec.UpdatedAt, &toolOverridesJSON); err != nil {
 			return nil, fmt.Errorf("scan mcp server: %w", err)
 		}
 
@@ -123,6 +130,7 @@ func (s *MCPServerStore) List(ctx context.Context, subject string, teams []strin
 			if rec.Headers == nil {
 				rec.Headers = map[string]string{}
 			}
+			rec.ToolOverrides = toolOverridesJSON
 			results = append(results, rec)
 		}
 	}
@@ -132,7 +140,7 @@ func (s *MCPServerStore) List(ctx context.Context, subject string, teams []strin
 
 func (s *MCPServerStore) ListAll(ctx context.Context) ([]MCPServerRecord, error) {
 	rows, err := s.db.Query(ctx,
-		`SELECT id, name, url, transport, headers, scope, team, created_by, created_at, updated_at FROM mcp_servers ORDER BY name ASC`,
+		`SELECT id, name, url, transport, headers, scope, team, created_by, created_at, updated_at, tool_overrides FROM mcp_servers ORDER BY name ASC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list all mcp servers: %w", err)
@@ -143,9 +151,10 @@ func (s *MCPServerStore) ListAll(ctx context.Context) ([]MCPServerRecord, error)
 	for rows.Next() {
 		var rec MCPServerRecord
 		var headersJSON []byte
+		var toolOverridesJSON []byte
 		var team *string
 
-		if err := rows.Scan(&rec.ID, &rec.Name, &rec.URL, &rec.Transport, &headersJSON, &rec.Scope, &team, &rec.CreatedBy, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.Name, &rec.URL, &rec.Transport, &headersJSON, &rec.Scope, &team, &rec.CreatedBy, &rec.CreatedAt, &rec.UpdatedAt, &toolOverridesJSON); err != nil {
 			return nil, fmt.Errorf("scan mcp server: %w", err)
 		}
 
@@ -156,6 +165,7 @@ func (s *MCPServerStore) ListAll(ctx context.Context) ([]MCPServerRecord, error)
 		if rec.Headers == nil {
 			rec.Headers = map[string]string{}
 		}
+		rec.ToolOverrides = toolOverridesJSON
 		results = append(results, rec)
 	}
 
@@ -217,12 +227,13 @@ func (s *MCPServerStore) CanEdit(subject string, teams []string, isGlobalAdmin, 
 func (s *MCPServerStore) GetByID(ctx context.Context, id string) (*MCPServerRecord, error) {
 	var rec MCPServerRecord
 	var headersJSON []byte
+	var toolOverridesJSON []byte
 	var team *string
 
 	err := s.db.QueryRow(ctx,
-		`SELECT id, name, url, transport, headers, scope, team, created_by, created_at, updated_at FROM mcp_servers WHERE id = $1`,
+		`SELECT id, name, url, transport, headers, scope, team, created_by, created_at, updated_at, tool_overrides FROM mcp_servers WHERE id = $1`,
 		id,
-	).Scan(&rec.ID, &rec.Name, &rec.URL, &rec.Transport, &headersJSON, &rec.Scope, &team, &rec.CreatedBy, &rec.CreatedAt, &rec.UpdatedAt)
+	).Scan(&rec.ID, &rec.Name, &rec.URL, &rec.Transport, &headersJSON, &rec.Scope, &team, &rec.CreatedBy, &rec.CreatedAt, &rec.UpdatedAt, &toolOverridesJSON)
 	if err == pgx.ErrNoRows {
 		return nil, ErrMCPServerNotFound
 	}
@@ -237,10 +248,11 @@ func (s *MCPServerStore) GetByID(ctx context.Context, id string) (*MCPServerReco
 	if rec.Headers == nil {
 		rec.Headers = map[string]string{}
 	}
+	rec.ToolOverrides = toolOverridesJSON
 	return &rec, nil
 }
 
-func (s *MCPServerStore) Update(ctx context.Context, id, name, url, transport, scope, team string, headers map[string]string) (*MCPServerRecord, error) {
+func (s *MCPServerStore) Update(ctx context.Context, id, name, url, transport, scope, team string, headers map[string]string, toolOverrides json.RawMessage) (*MCPServerRecord, error) {
 	headersJSON, err := json.Marshal(headers)
 	if err != nil {
 		return nil, fmt.Errorf("marshal headers: %w", err)
@@ -248,12 +260,13 @@ func (s *MCPServerStore) Update(ctx context.Context, id, name, url, transport, s
 
 	var rec MCPServerRecord
 	var hdrJSON []byte
+	var toolOverridesJSON []byte
 	var dbTeam *string
 
 	err = s.db.QueryRow(ctx,
-		`UPDATE mcp_servers SET name=$1, url=$2, transport=$3, headers=$4, scope=$5, team=$6, updated_at=NOW() WHERE id=$7 RETURNING id, name, url, transport, headers, scope, team, created_by, created_at, updated_at`,
-		name, url, transport, headersJSON, scope, team, id,
-	).Scan(&rec.ID, &rec.Name, &rec.URL, &rec.Transport, &hdrJSON, &rec.Scope, &dbTeam, &rec.CreatedBy, &rec.CreatedAt, &rec.UpdatedAt)
+		`UPDATE mcp_servers SET name=$1, url=$2, transport=$3, headers=$4, scope=$5, team=$6, tool_overrides=$7, updated_at=NOW() WHERE id=$8 RETURNING id, name, url, transport, headers, scope, team, created_by, created_at, updated_at, tool_overrides`,
+		name, url, transport, headersJSON, scope, team, toolOverrides, id,
+	).Scan(&rec.ID, &rec.Name, &rec.URL, &rec.Transport, &hdrJSON, &rec.Scope, &dbTeam, &rec.CreatedBy, &rec.CreatedAt, &rec.UpdatedAt, &toolOverridesJSON)
 	if err == pgx.ErrNoRows {
 		return nil, ErrMCPServerNotFound
 	}
@@ -268,6 +281,7 @@ func (s *MCPServerStore) Update(ctx context.Context, id, name, url, transport, s
 	if rec.Headers == nil {
 		rec.Headers = map[string]string{}
 	}
+	rec.ToolOverrides = toolOverridesJSON
 	return &rec, nil
 }
 

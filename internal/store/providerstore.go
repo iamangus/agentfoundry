@@ -24,6 +24,7 @@ type ProviderRecord struct {
 	DefaultModel     string            `json:"default_model"`
 	SchemaValidation bool              `json:"schema_validation"`
 	Headers          map[string]string `json:"headers"`
+	Reasoning        json.RawMessage   `json:"reasoning,omitempty"`
 	Scope            string            `json:"scope"`
 	Team             string            `json:"team,omitempty"`
 	CreatedBy        string            `json:"created_by"`
@@ -39,7 +40,7 @@ func NewProviderStore(db *pgxpool.Pool) *ProviderStore {
 	return &ProviderStore{db: db}
 }
 
-func (s *ProviderStore) Create(ctx context.Context, name, providerType, baseURL, apiKey, defaultModel string, schemaValidation bool, scope, team, createdBy string, headers map[string]string) (*ProviderRecord, error) {
+func (s *ProviderStore) Create(ctx context.Context, name, providerType, baseURL, apiKey, defaultModel string, schemaValidation bool, scope, team, createdBy string, headers map[string]string, reasoning json.RawMessage) (*ProviderRecord, error) {
 	headersJSON, err := json.Marshal(headers)
 	if err != nil {
 		return nil, fmt.Errorf("marshal headers: %w", err)
@@ -49,9 +50,9 @@ func (s *ProviderStore) Create(ctx context.Context, name, providerType, baseURL,
 	var updatedAt time.Time
 
 	err = s.db.QueryRow(ctx,
-		`INSERT INTO inference_providers (name, provider_type, base_url, api_key, default_model, schema_validation, headers, scope, team, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id, name, provider_type, base_url, api_key, default_model, schema_validation, headers, scope, team, created_by, created_at, updated_at`,
-		name, providerType, baseURL, apiKey, defaultModel, schemaValidation, headersJSON, scope, team, createdBy,
-	).Scan(&rec.ID, &rec.Name, &rec.ProviderType, &rec.BaseURL, &rec.APIKey, &rec.DefaultModel, &rec.SchemaValidation, &headersJSON, &rec.Scope, &rec.Team, &rec.CreatedBy, &rec.CreatedAt, &updatedAt)
+		`INSERT INTO inference_providers (name, provider_type, base_url, api_key, default_model, schema_validation, headers, reasoning, scope, team, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id, name, provider_type, base_url, api_key, default_model, schema_validation, headers, reasoning, scope, team, created_by, created_at, updated_at`,
+		name, providerType, baseURL, apiKey, defaultModel, schemaValidation, headersJSON, reasoning, scope, team, createdBy,
+	).Scan(&rec.ID, &rec.Name, &rec.ProviderType, &rec.BaseURL, &rec.APIKey, &rec.DefaultModel, &rec.SchemaValidation, &headersJSON, &rec.Reasoning, &rec.Scope, &rec.Team, &rec.CreatedBy, &rec.CreatedAt, &updatedAt)
 	if err != nil {
 		if isPgUniqueViolation(err) {
 			return nil, ErrProviderNameTaken
@@ -70,9 +71,9 @@ func (s *ProviderStore) GetByID(ctx context.Context, id string) (*ProviderRecord
 	var team *string
 
 	err := s.db.QueryRow(ctx,
-		`SELECT id, name, provider_type, base_url, api_key, default_model, schema_validation, headers, scope, team, created_by, created_at, updated_at FROM inference_providers WHERE id = $1`,
+		`SELECT id, name, provider_type, base_url, api_key, default_model, schema_validation, headers, reasoning, scope, team, created_by, created_at, updated_at FROM inference_providers WHERE id = $1`,
 		id,
-	).Scan(&rec.ID, &rec.Name, &rec.ProviderType, &rec.BaseURL, &rec.APIKey, &rec.DefaultModel, &rec.SchemaValidation, &headersJSON, &rec.Scope, &team, &rec.CreatedBy, &rec.CreatedAt, &rec.UpdatedAt)
+	).Scan(&rec.ID, &rec.Name, &rec.ProviderType, &rec.BaseURL, &rec.APIKey, &rec.DefaultModel, &rec.SchemaValidation, &headersJSON, &rec.Reasoning, &rec.Scope, &team, &rec.CreatedBy, &rec.CreatedAt, &rec.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, ErrProviderNotFound
 	}
@@ -96,9 +97,9 @@ func (s *ProviderStore) GetByName(ctx context.Context, name string) (*ProviderRe
 	var team *string
 
 	err := s.db.QueryRow(ctx,
-		`SELECT id, name, provider_type, base_url, api_key, default_model, schema_validation, headers, scope, team, created_by, created_at, updated_at FROM inference_providers WHERE name = $1`,
+		`SELECT id, name, provider_type, base_url, api_key, default_model, schema_validation, headers, reasoning, scope, team, created_by, created_at, updated_at FROM inference_providers WHERE name = $1`,
 		name,
-	).Scan(&rec.ID, &rec.Name, &rec.ProviderType, &rec.BaseURL, &rec.APIKey, &rec.DefaultModel, &rec.SchemaValidation, &headersJSON, &rec.Scope, &team, &rec.CreatedBy, &rec.CreatedAt, &rec.UpdatedAt)
+	).Scan(&rec.ID, &rec.Name, &rec.ProviderType, &rec.BaseURL, &rec.APIKey, &rec.DefaultModel, &rec.SchemaValidation, &headersJSON, &rec.Reasoning, &rec.Scope, &team, &rec.CreatedBy, &rec.CreatedAt, &rec.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, ErrProviderNotFound
 	}
@@ -118,7 +119,7 @@ func (s *ProviderStore) GetByName(ctx context.Context, name string) (*ProviderRe
 
 func (s *ProviderStore) List(ctx context.Context, subject string, teams []string, isGlobalAdmin bool) ([]ProviderRecord, error) {
 	rows, err := s.db.Query(ctx,
-		`SELECT id, name, provider_type, base_url, api_key, default_model, schema_validation, headers, scope, team, created_by, created_at, updated_at FROM inference_providers ORDER BY name ASC`,
+		`SELECT id, name, provider_type, base_url, api_key, default_model, schema_validation, headers, reasoning, scope, team, created_by, created_at, updated_at FROM inference_providers ORDER BY name ASC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list inference providers: %w", err)
@@ -131,7 +132,7 @@ func (s *ProviderStore) List(ctx context.Context, subject string, teams []string
 		var headersJSON []byte
 		var team *string
 
-		if err := rows.Scan(&rec.ID, &rec.Name, &rec.ProviderType, &rec.BaseURL, &rec.APIKey, &rec.DefaultModel, &rec.SchemaValidation, &headersJSON, &rec.Scope, &team, &rec.CreatedBy, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.Name, &rec.ProviderType, &rec.BaseURL, &rec.APIKey, &rec.DefaultModel, &rec.SchemaValidation, &headersJSON, &rec.Reasoning, &rec.Scope, &team, &rec.CreatedBy, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan inference provider: %w", err)
 		}
 
@@ -153,7 +154,7 @@ func (s *ProviderStore) List(ctx context.Context, subject string, teams []string
 
 func (s *ProviderStore) ListAll(ctx context.Context) ([]ProviderRecord, error) {
 	rows, err := s.db.Query(ctx,
-		`SELECT id, name, provider_type, base_url, api_key, default_model, schema_validation, headers, scope, team, created_by, created_at, updated_at FROM inference_providers ORDER BY name ASC`,
+		`SELECT id, name, provider_type, base_url, api_key, default_model, schema_validation, headers, reasoning, scope, team, created_by, created_at, updated_at FROM inference_providers ORDER BY name ASC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list all inference providers: %w", err)
@@ -166,7 +167,7 @@ func (s *ProviderStore) ListAll(ctx context.Context) ([]ProviderRecord, error) {
 		var headersJSON []byte
 		var team *string
 
-		if err := rows.Scan(&rec.ID, &rec.Name, &rec.ProviderType, &rec.BaseURL, &rec.APIKey, &rec.DefaultModel, &rec.SchemaValidation, &headersJSON, &rec.Scope, &team, &rec.CreatedBy, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.Name, &rec.ProviderType, &rec.BaseURL, &rec.APIKey, &rec.DefaultModel, &rec.SchemaValidation, &headersJSON, &rec.Reasoning, &rec.Scope, &team, &rec.CreatedBy, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan inference provider: %w", err)
 		}
 
@@ -183,7 +184,7 @@ func (s *ProviderStore) ListAll(ctx context.Context) ([]ProviderRecord, error) {
 	return results, nil
 }
 
-func (s *ProviderStore) Update(ctx context.Context, id, name, providerType, baseURL, apiKey, defaultModel string, schemaValidation bool, scope, team string, headers map[string]string) (*ProviderRecord, error) {
+func (s *ProviderStore) Update(ctx context.Context, id, name, providerType, baseURL, apiKey, defaultModel string, schemaValidation bool, scope, team string, headers map[string]string, reasoning json.RawMessage) (*ProviderRecord, error) {
 	headersJSON, err := json.Marshal(headers)
 	if err != nil {
 		return nil, fmt.Errorf("marshal headers: %w", err)
@@ -193,9 +194,9 @@ func (s *ProviderStore) Update(ctx context.Context, id, name, providerType, base
 	var updatedAt time.Time
 
 	err = s.db.QueryRow(ctx,
-		`UPDATE inference_providers SET name = $1, provider_type = $2, base_url = $3, api_key = $4, default_model = $5, schema_validation = $6, headers = $7, scope = $8, team = $9, updated_at = NOW() WHERE id = $10 RETURNING id, name, provider_type, base_url, api_key, default_model, schema_validation, headers, scope, team, created_by, created_at, updated_at`,
-		name, providerType, baseURL, apiKey, defaultModel, schemaValidation, headersJSON, scope, team, id,
-	).Scan(&rec.ID, &rec.Name, &rec.ProviderType, &rec.BaseURL, &rec.APIKey, &rec.DefaultModel, &rec.SchemaValidation, &headersJSON, &rec.Scope, &rec.Team, &rec.CreatedBy, &rec.CreatedAt, &updatedAt)
+		`UPDATE inference_providers SET name = $1, provider_type = $2, base_url = $3, api_key = $4, default_model = $5, schema_validation = $6, headers = $7, reasoning = $8, scope = $9, team = $10, updated_at = NOW() WHERE id = $11 RETURNING id, name, provider_type, base_url, api_key, default_model, schema_validation, headers, reasoning, scope, team, created_by, created_at, updated_at`,
+		name, providerType, baseURL, apiKey, defaultModel, schemaValidation, headersJSON, reasoning, scope, team, id,
+	).Scan(&rec.ID, &rec.Name, &rec.ProviderType, &rec.BaseURL, &rec.APIKey, &rec.DefaultModel, &rec.SchemaValidation, &headersJSON, &rec.Reasoning, &rec.Scope, &rec.Team, &rec.CreatedBy, &rec.CreatedAt, &updatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, ErrProviderNotFound
 	}

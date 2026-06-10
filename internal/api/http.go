@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -116,6 +117,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/providers/{name}", h.getProvider)
 	mux.HandleFunc("PUT /api/v1/providers/{id}", h.updateProvider)
 	mux.HandleFunc("DELETE /api/v1/providers/{id}", h.deleteProvider)
+
+	mux.HandleFunc("GET /api/v1/models/{model}/capabilities", h.getModelCapabilities)
 
 	mux.HandleFunc("POST /api/v1/inference/agents/{agentID}/chat/completions", h.inferenceProxy)
 
@@ -463,12 +466,25 @@ func (h *Handler) rollbackVersion(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) listTools(w http.ResponseWriter, r *http.Request) {
 	allTools := h.pool.ListAllTools()
 
+	serverOverrides := make(map[string]json.RawMessage)
+	if h.mcpStore != nil {
+		records, err := h.mcpStore.ListAll(r.Context())
+		if err == nil {
+			for _, rec := range records {
+				if len(rec.ToolOverrides) > 0 {
+					serverOverrides[rec.Name] = rec.ToolOverrides
+				}
+			}
+		}
+	}
+
 	type toolInfo struct {
 		QualifiedName string          `json:"qualified_name"`
 		Server        string          `json:"server"`
 		Name          string          `json:"name"`
 		Description   string          `json:"description"`
 		InputSchema   json.RawMessage `json:"input_schema"`
+		ToolOverrides json.RawMessage `json:"tool_overrides,omitempty"`
 	}
 
 	tools := make([]toolInfo, len(allTools))
@@ -479,6 +495,7 @@ func (h *Handler) listTools(w http.ResponseWriter, r *http.Request) {
 			Name:          dt.Tool.Name,
 			Description:   dt.Tool.Description,
 			InputSchema:   dt.InputSchemaJSON(),
+			ToolOverrides: serverOverrides[dt.ServerName],
 		}
 	}
 
@@ -520,6 +537,12 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ac := auth.FromContext(r)
+	userSubject := ""
+	if ac != nil {
+		userSubject = ac.Subject
+	}
+
 	var req runAgentRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
@@ -552,6 +575,7 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 		MemoryEnabled:       def.MemoryEnabled,
 		MemorySearchAgentID: def.MemorySearchAgentID,
 		MemoryIngestAgentID: def.MemoryIngestAgentID,
+		UserSubject:         userSubject,
 	})
 	if err != nil {
 		for _, n := range ephemeralNames {
@@ -650,6 +674,8 @@ func (h *Handler) buildLLMConfig(ctx context.Context, def *config.Definition) *t
 	}
 	return &temporal.LLMConfigInput{
 		SchemaValidation: prov.SchemaValidation,
+		Reasoning:        prov.Reasoning,
+		ModelParams:      def.ModelParams,
 	}
 }
 
@@ -800,6 +826,26 @@ func (h *Handler) postChatMessage(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		ctx := context.WithoutCancel(r.Context())
 
+		stream := h.streams.Get(runID)
+		if stream == nil {
+			return
+		}
+
+		select {
+		case <-stream.Ready():
+		case <-time.After(60 * time.Second):
+			h.sessions.AddMessage(sessionID, session.Message{
+				Role:    "assistant",
+				Content: "Error: timeout waiting for response",
+				Time:    time.Now(),
+			})
+			h.sessions.ClearActiveRunID(sessionID)
+			h.streams.PublishError(runID, "timeout")
+			return
+		case <-ctx.Done():
+			return
+		}
+
 		if def == nil {
 			errMsg := fmt.Sprintf("agent %q not found", sess.AgentID)
 			h.streams.PublishError(runID, errMsg)
@@ -835,7 +881,8 @@ func (h *Handler) postChatMessage(w http.ResponseWriter, r *http.Request) {
 			LLMConfig:     h.buildLLMConfig(ctx, def),
 		MemoryEnabled:       def.MemoryEnabled,
 		MemorySearchAgentID: def.MemorySearchAgentID,
-		MemoryIngestAgentID: def.MemoryIngestAgentID,		})
+		MemoryIngestAgentID: def.MemoryIngestAgentID,
+		UserSubject:         ac.Subject,		})
 		if err != nil {
 			slog.Error("agent run failed", "agent", sess.AgentID, "error", err)
 
@@ -886,6 +933,12 @@ func (h *Handler) runEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	runStream := h.streams.Get(runID)
+	if runStream == nil {
+		http.Error(w, "run not found", http.StatusNotFound)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
@@ -896,7 +949,18 @@ func (h *Handler) runEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ch, unsubscribe := h.streams.Get(runID).Subscribe()
+	strm := h.streams.Get(runID)
+	var ch <-chan stream.Event
+	var unsubscribe func()
+	if lastID := r.Header.Get("Last-Event-ID"); lastID != "" {
+		if id, err := strconv.ParseInt(lastID, 10, 64); err == nil {
+			ch, unsubscribe = strm.SubscribeFrom(id)
+		} else {
+			ch, unsubscribe = strm.Subscribe()
+		}
+	} else {
+		ch, unsubscribe = strm.SubscribeFrom(strm.LatestID())
+	}
 	defer unsubscribe()
 
 	buf := make([]byte, 0, 256)
@@ -907,7 +971,9 @@ func (h *Handler) runEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			buf = buf[:0]
-			buf = append(buf, "event: "...)
+			buf = append(buf, "id:"...)
+			buf = strconv.AppendInt(buf, evt.ID, 10)
+			buf = append(buf, "\nevent: "...)
 			buf = append(buf, evt.Type...)
 			buf = append(buf, "\ndata: "...)
 			if strings.Contains(evt.Data, "\n") {

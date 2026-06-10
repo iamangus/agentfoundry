@@ -12,12 +12,13 @@ import (
 )
 
 type createMCPServerRequest struct {
-	Name      string            `json:"name"`
-	URL       string            `json:"url"`
-	Transport string            `json:"transport"`
-	Headers   map[string]string `json:"headers,omitempty"`
-	Scope     string            `json:"scope"`
-	Team      string            `json:"team,omitempty"`
+	Name          string            `json:"name"`
+	URL           string            `json:"url"`
+	Transport     string            `json:"transport"`
+	Headers       map[string]string `json:"headers,omitempty"`
+	Scope         string            `json:"scope"`
+	Team          string            `json:"team,omitempty"`
+	ToolOverrides json.RawMessage   `json:"tool_overrides,omitempty"`
 }
 
 type toolInfo struct {
@@ -28,18 +29,19 @@ type toolInfo struct {
 }
 
 type mcpServerResponse struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	URL       string            `json:"url"`
-	Transport string            `json:"transport"`
-	Headers   map[string]string `json:"headers,omitempty"`
-	Scope     string            `json:"scope"`
-	Team      string            `json:"team,omitempty"`
-	CreatedBy string            `json:"created_by"`
-	CreatedAt string            `json:"created_at"`
-	UpdatedAt string            `json:"updated_at"`
-	Connected bool              `json:"connected"`
-	Tools     []toolInfo        `json:"tools"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	URL           string            `json:"url"`
+	Transport     string            `json:"transport"`
+	Headers       map[string]string `json:"headers,omitempty"`
+	Scope         string            `json:"scope"`
+	Team          string            `json:"team,omitempty"`
+	CreatedBy     string            `json:"created_by"`
+	CreatedAt     string            `json:"created_at"`
+	UpdatedAt     string            `json:"updated_at"`
+	Connected     bool              `json:"connected"`
+	Tools         []toolInfo        `json:"tools"`
+	ToolOverrides json.RawMessage   `json:"tool_overrides,omitempty"`
 }
 
 type setToolScopeRequest struct {
@@ -271,7 +273,7 @@ func (h *Handler) updateMCPServer(w http.ResponseWriter, r *http.Request) {
 	oldName := existing.Name
 	h.pool.DisconnectDynamic(oldName)
 
-	rec, err := h.mcpStore.Update(r.Context(), id, req.Name, req.URL, req.Transport, req.Scope, req.Team, req.Headers)
+	rec, err := h.mcpStore.Update(r.Context(), id, req.Name, req.URL, req.Transport, req.Scope, req.Team, req.Headers, req.ToolOverrides)
 	if err != nil {
 		slog.Error("failed to update mcp server", "id", id, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update server"})
@@ -471,18 +473,19 @@ func toMCPServerResponse(rec auth.MCPServerRecord, pool *mcpclient.Pool, store *
 	}
 
 	return mcpServerResponse{
-		ID:        rec.ID,
-		Name:      rec.Name,
-		URL:       rec.URL,
-		Transport: rec.Transport,
-		Headers:   rec.Headers,
-		Scope:     rec.Scope,
-		Team:      rec.Team,
-		CreatedBy: rec.CreatedBy,
-		CreatedAt: rec.CreatedAt.Format("2006-01-02T15:04:05Z"),
-		UpdatedAt: rec.UpdatedAt.Format("2006-01-02T15:04:05Z"),
-		Connected: status.Connected,
-		Tools:     tools,
+		ID:            rec.ID,
+		Name:          rec.Name,
+		URL:           rec.URL,
+		Transport:     rec.Transport,
+		Headers:       rec.Headers,
+		Scope:         rec.Scope,
+		Team:          rec.Team,
+		CreatedBy:     rec.CreatedBy,
+		CreatedAt:     rec.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		UpdatedAt:     rec.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+		Connected:     status.Connected,
+		Tools:         tools,
+		ToolOverrides: rec.ToolOverrides,
 	}
 }
 

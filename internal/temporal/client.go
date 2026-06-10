@@ -29,7 +29,9 @@ const (
 )
 
 type LLMConfigInput struct {
-	SchemaValidation bool `json:"schema_validation"`
+	SchemaValidation bool            `json:"schema_validation"`
+	Reasoning        json.RawMessage `json:"reasoning,omitempty"`
+	ModelParams      json.RawMessage `json:"model_params,omitempty"`
 }
 
 type RunAgentParams struct {
@@ -44,6 +46,7 @@ type RunAgentParams struct {
 	MemoryEnabled       bool                     `json:"memory_enabled,omitempty"`
 	MemorySearchAgentID string                   `json:"memory_search_agent_id,omitempty"`
 	MemoryIngestAgentID string                   `json:"memory_ingest_agent_id,omitempty"`
+	UserSubject         string                   `json:"user_subject,omitempty"`
 }
 
 type RunAgentResult struct {

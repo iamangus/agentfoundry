@@ -5,6 +5,7 @@ import "sync"
 const subBufferSize = 64
 
 type Event struct {
+	ID   int64
 	Type string
 	Data string
 }
@@ -14,11 +15,15 @@ type Stream struct {
 	events []Event
 	subs   []chan Event
 	closed bool
+	ready  chan struct{}
+	nextID int64
 }
 
 func (s *Stream) publish(evt Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	evt.ID = s.nextID
+	s.nextID++
 	s.events = append(s.events, evt)
 	for _, ch := range s.subs {
 		select {
@@ -36,10 +41,20 @@ func (s *Stream) publish(evt Event) {
 }
 
 func (s *Stream) Subscribe() (<-chan Event, func()) {
+	return s.subscribeFrom(0)
+}
+
+func (s *Stream) subscribeFrom(fromID int64) (<-chan Event, func()) {
 	ch := make(chan Event, subBufferSize)
 	s.mu.Lock()
+	if s.ready == nil {
+		s.ready = make(chan struct{})
+	}
+	ready := s.ready
 	for _, evt := range s.events {
-		ch <- evt
+		if evt.ID > fromID {
+			ch <- evt
+		}
 	}
 	if s.closed {
 		close(ch)
@@ -49,6 +64,7 @@ func (s *Stream) Subscribe() (<-chan Event, func()) {
 	s.subs = append(s.subs, ch)
 	s.mu.Unlock()
 
+	first := true
 	unsubscribe := func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -58,8 +74,31 @@ func (s *Stream) Subscribe() (<-chan Event, func()) {
 				break
 			}
 		}
+		if first {
+			first = false
+			close(ready)
+		}
 	}
 	return ch, unsubscribe
+}
+
+func (s *Stream) SubscribeFrom(eventID int64) (<-chan Event, func()) {
+	return s.subscribeFrom(eventID)
+}
+
+func (s *Stream) LatestID() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.nextID - 1
+}
+
+func (s *Stream) Ready() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ready == nil {
+		s.ready = make(chan struct{})
+	}
+	return s.ready
 }
 
 type Manager struct {
@@ -72,7 +111,7 @@ func NewManager() *Manager {
 }
 
 func (m *Manager) Create(id string) *Stream {
-	s := &Stream{}
+	s := &Stream{ready: make(chan struct{})}
 	m.mu.Lock()
 	m.runs[id] = s
 	m.mu.Unlock()

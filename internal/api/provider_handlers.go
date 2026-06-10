@@ -17,6 +17,7 @@ type createProviderRequest struct {
 	DefaultModel     string            `json:"default_model"`
 	SchemaValidation bool              `json:"schema_validation"`
 	Headers          map[string]string `json:"headers"`
+	Reasoning        json.RawMessage   `json:"reasoning,omitempty"`
 	Scope            string            `json:"scope"`
 	Team             string            `json:"team,omitempty"`
 }
@@ -29,6 +30,7 @@ type updateProviderRequest struct {
 	DefaultModel     string            `json:"default_model"`
 	SchemaValidation bool              `json:"schema_validation"`
 	Headers          map[string]string `json:"headers"`
+	Reasoning        json.RawMessage   `json:"reasoning,omitempty"`
 	Scope            string            `json:"scope"`
 	Team             string            `json:"team,omitempty"`
 }
@@ -66,7 +68,7 @@ func (h *Handler) createProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rec, err := h.providerStore.Create(r.Context(), req.Name, req.ProviderType, req.BaseURL, req.APIKey, req.DefaultModel, req.SchemaValidation, scope, req.Team, ac.Subject, req.Headers)
+	rec, err := h.providerStore.Create(r.Context(), req.Name, req.ProviderType, req.BaseURL, req.APIKey, req.DefaultModel, req.SchemaValidation, scope, req.Team, ac.Subject, req.Headers, req.Reasoning)
 	if err != nil {
 		slog.Error("failed to create provider", "name", req.Name, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -150,7 +152,7 @@ func (h *Handler) updateProvider(w http.ResponseWriter, r *http.Request) {
 		req.APIKey = existing.APIKey
 	}
 
-	rec, err := h.providerStore.Update(r.Context(), id, req.Name, req.ProviderType, req.BaseURL, req.APIKey, req.DefaultModel, req.SchemaValidation, req.Scope, req.Team, req.Headers)
+	rec, err := h.providerStore.Update(r.Context(), id, req.Name, req.ProviderType, req.BaseURL, req.APIKey, req.DefaultModel, req.SchemaValidation, req.Scope, req.Team, req.Headers, req.Reasoning)
 	if err != nil {
 		slog.Error("failed to update provider", "id", id, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
