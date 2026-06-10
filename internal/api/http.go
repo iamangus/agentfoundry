@@ -118,7 +118,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/providers/{id}", h.updateProvider)
 	mux.HandleFunc("DELETE /api/v1/providers/{id}", h.deleteProvider)
 
-	mux.HandleFunc("GET /api/v1/models/{model}/capabilities", h.getModelCapabilities)
+	mux.HandleFunc("GET /api/v1/models/capabilities", h.getModelCapabilities)
 
 	mux.HandleFunc("POST /api/v1/inference/agents/{agentID}/chat/completions", h.inferenceProxy)
 

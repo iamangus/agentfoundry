@@ -39,7 +39,7 @@ type modelCapabilitiesResponse struct {
 }
 
 func (h *Handler) getModelCapabilities(w http.ResponseWriter, r *http.Request) {
-	modelID := r.PathValue("model")
+	modelID := r.URL.Query().Get("model")
 	if modelID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "model is required"})
 		return
