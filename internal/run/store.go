@@ -23,6 +23,8 @@ type Run struct {
 	Error      string    `json:"error,omitempty"`
 	WorkflowID string    `json:"-"`
 	CreatedAt  time.Time `json:"created_at"`
+	Owner      string    `json:"-"`
+	SessionID  string    `json:"-"`
 }
 
 type Store struct {
@@ -34,12 +36,14 @@ func New() *Store {
 	return &Store{runs: make(map[string]*Run)}
 }
 
-func (s *Store) Create(agentName string) *Run {
+func (s *Store) Create(agentName, owner, sessionID string) *Run {
 	r := &Run{
 		ID:        newID(),
 		AgentName: agentName,
 		Status:    StatusRunning,
 		CreatedAt: time.Now(),
+		Owner:     owner,
+		SessionID: sessionID,
 	}
 	s.mu.Lock()
 	s.runs[r.ID] = r

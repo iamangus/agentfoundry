@@ -15,7 +15,6 @@ type Stream struct {
 	events []Event
 	subs   []chan Event
 	closed bool
-	ready  chan struct{}
 	nextID int64
 }
 
@@ -47,10 +46,6 @@ func (s *Stream) Subscribe() (<-chan Event, func()) {
 func (s *Stream) subscribeFrom(fromID int64) (<-chan Event, func()) {
 	ch := make(chan Event, subBufferSize)
 	s.mu.Lock()
-	if s.ready == nil {
-		s.ready = make(chan struct{})
-	}
-	ready := s.ready
 	for _, evt := range s.events {
 		if evt.ID > fromID {
 			ch <- evt
@@ -64,7 +59,6 @@ func (s *Stream) subscribeFrom(fromID int64) (<-chan Event, func()) {
 	s.subs = append(s.subs, ch)
 	s.mu.Unlock()
 
-	first := true
 	unsubscribe := func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -73,10 +67,6 @@ func (s *Stream) subscribeFrom(fromID int64) (<-chan Event, func()) {
 				s.subs = append(s.subs[:i], s.subs[i+1:]...)
 				break
 			}
-		}
-		if first {
-			first = false
-			close(ready)
 		}
 	}
 	return ch, unsubscribe
@@ -92,15 +82,6 @@ func (s *Stream) LatestID() int64 {
 	return s.nextID - 1
 }
 
-func (s *Stream) Ready() <-chan struct{} {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.ready == nil {
-		s.ready = make(chan struct{})
-	}
-	return s.ready
-}
-
 type Manager struct {
 	mu   sync.Mutex
 	runs map[string]*Stream
@@ -111,7 +92,7 @@ func NewManager() *Manager {
 }
 
 func (m *Manager) Create(id string) *Stream {
-	s := &Stream{ready: make(chan struct{})}
+	s := &Stream{}
 	m.mu.Lock()
 	m.runs[id] = s
 	m.mu.Unlock()

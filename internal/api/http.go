@@ -86,6 +86,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/agents/{name}/run", h.runAgent)
 	mux.HandleFunc("GET /api/v1/runs/{id}", h.getRunStatus)
 	mux.HandleFunc("POST /api/v1/runs/{id}/cancel", h.cancelRun)
+	mux.HandleFunc("GET /api/v1/runs/{id}/events", h.runEvents)
 	mux.HandleFunc("GET /api/v1/tools", h.listTools)
 	mux.HandleFunc("GET /api/v1/status", h.getStatus)
 	mux.HandleFunc("POST /api/internal/mcp/call", h.mcpProxyCall)
@@ -95,8 +96,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/chat/sessions", h.createChatSession)
 	mux.HandleFunc("GET /api/v1/chat/sessions", h.listChatSessions)
 	mux.HandleFunc("GET /api/v1/chat/sessions/{id}", h.getChatSession)
-	mux.HandleFunc("POST /api/v1/chat/sessions/{id}/messages", h.postChatMessage)
-	mux.HandleFunc("GET /api/v1/chat/runs/{id}/events", h.runEvents)
 
 	mux.HandleFunc("POST /api/v1/api-keys", h.createAPIKey)
 	mux.HandleFunc("GET /api/v1/api-keys", h.listAPIKeys)
@@ -520,6 +519,7 @@ func (h *Handler) getStatus(w http.ResponseWriter, r *http.Request) {
 type runAgentRequest struct {
 	Message        string                   `json:"message"`
 	History        []llm.Message            `json:"history,omitempty"`
+	SessionID      string                   `json:"session_id,omitempty"`
 	MCPServers     []mcpclient.ServerConfig `json:"mcp_servers,omitempty"`
 	ResponseSchema *config.StructuredOutput `json:"response_schema,omitempty"`
 }
@@ -531,16 +531,10 @@ type runAgentResponse struct {
 func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 	agentID := r.PathValue("name")
 
-	def := h.store.GetDefinitionByID(agentID)
-	if def == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found: " + agentID})
-		return
-	}
-
 	ac := auth.FromContext(r)
-	userSubject := ""
-	if ac != nil {
-		userSubject = ac.Subject
+	if ac == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
 	}
 
 	var req runAgentRequest
@@ -550,6 +544,40 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Message == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "message is required"})
+		return
+	}
+
+	var def *config.Definition
+	var history []llm.Message
+	var sessionID string
+
+	if req.SessionID != "" {
+		sess := h.sessions.Get(req.SessionID)
+		if sess == nil || sess.Owner != ac.Subject {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
+			return
+		}
+		def = h.store.GetDefinitionByID(sess.AgentID)
+		sessionID = req.SessionID
+
+		h.sessions.AddMessage(sessionID, session.Message{
+			Role:    "user",
+			Content: req.Message,
+			Time:    time.Now(),
+		})
+
+		allMsgs := h.sessions.Get(sessionID).Messages
+		for i := 0; i < len(allMsgs)-1; i++ {
+			m := allMsgs[i]
+			history = append(history, llm.Message{Role: m.Role, Content: m.Content})
+		}
+	} else {
+		def = h.store.GetDefinitionByID(agentID)
+		history = req.History
+	}
+
+	if def == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found: " + agentID})
 		return
 	}
 
@@ -564,29 +592,41 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 		ephemeralNames = append(ephemeralNames, srv.Name)
 	}
 
+	newRun := h.runs.Create(def.Name, ac.Subject, sessionID)
+	h.streams.Create(newRun.ID)
+	if sessionID != "" {
+		h.sessions.SetActiveRunID(sessionID, newRun.ID)
+	}
+
 	workflowID, await, err := h.temporal.StartWorkflow(r.Context(), temporal.RunAgentParams{
 		AgentID:        def.AgentID,
 		AgentName:      def.Name,
 		Message:        req.Message,
-		History:        req.History,
+		History:        history,
 		MCPServers:     req.MCPServers,
 		ResponseSchema: req.ResponseSchema,
+		StreamID:       newRun.ID,
+		SessionID:      sessionID,
 		LLMConfig:      h.buildLLMConfig(r.Context(), def),
 		MemoryEnabled:       def.MemoryEnabled,
 		MemorySearchAgentID: def.MemorySearchAgentID,
 		MemoryIngestAgentID: def.MemoryIngestAgentID,
-		UserSubject:         userSubject,
+		UserSubject:         ac.Subject,
 	})
 	if err != nil {
 		for _, n := range ephemeralNames {
 			h.pool.UnregisterEphemeral(n)
+		}
+		h.streams.Delete(newRun.ID)
+		h.runs.Delete(newRun.ID)
+		if sessionID != "" {
+			h.sessions.ClearActiveRunID(sessionID)
 		}
 		slog.Error("failed to start temporal workflow", "agent", def.Name, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to start workflow: " + err.Error()})
 		return
 	}
 
-	newRun := h.runs.Create(def.Name)
 	h.runs.SetWorkflowID(newRun.ID, workflowID)
 
 	go func() {
@@ -599,18 +639,39 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 			time.AfterFunc(5*time.Minute, func() {
 				h.runs.Delete(newRun.ID)
 			})
+			time.AfterFunc(30*time.Second, func() {
+				h.streams.Delete(newRun.ID)
+			})
 		}
 
 		agentResult, err := await(ctx)
 		if err != nil {
 			slog.Error("agent run failed", "agent", def.Name, "run_id", newRun.ID, "error", err)
 			h.runs.UpdateStatus(newRun.ID, run.StatusFailed, "", err.Error())
+			h.streams.PublishError(newRun.ID, "Error: "+err.Error())
+			if sessionID != "" {
+				h.sessions.AddMessage(sessionID, session.Message{
+					Role:    "assistant",
+					Content: "Error: " + err.Error(),
+					Time:    time.Now(),
+				})
+				h.sessions.ClearActiveRunID(sessionID)
+			}
 			cleanup()
 			return
 		}
 
 		slog.Info("agent run completed", "agent", def.Name, "run_id", newRun.ID)
 		h.runs.UpdateStatus(newRun.ID, run.StatusCompleted, agentResult.Response, "")
+		h.streams.PublishDone(newRun.ID, agentResult.Response)
+		if sessionID != "" {
+			h.sessions.AddMessage(sessionID, session.Message{
+				Role:    "assistant",
+				Content: agentResult.Response,
+				Time:    time.Now(),
+			})
+			h.sessions.ClearActiveRunID(sessionID)
+		}
 		cleanup()
 	}()
 
@@ -779,154 +840,19 @@ func (h *Handler) getChatSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sess)
 }
 
-type postMessageRequest struct {
-	Message string `json:"message"`
-}
 
-type postMessageResponse struct {
-	RunID string `json:"run_id"`
-}
-
-func (h *Handler) postChatMessage(w http.ResponseWriter, r *http.Request) {
-	ac := auth.FromContext(r)
-	if ac == nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-		return
-	}
-
-	sessionID := r.PathValue("id")
-
-	var req postMessageRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
-		return
-	}
-	if req.Message == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "message is required"})
-		return
-	}
-
-	sess := h.sessions.Get(sessionID)
-	if sess == nil || sess.Owner != ac.Subject {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
-		return
-	}
-
-	userMsg := session.Message{Role: "user", Content: req.Message, Time: time.Now()}
-	h.sessions.AddMessage(sessionID, userMsg)
-
-	def := h.store.GetDefinitionByID(sess.AgentID)
-
-	runID := newRunID()
-	h.streams.Create(runID)
-	h.sessions.SetActiveRunID(sessionID, runID)
-
-	go func() {
-		ctx := context.WithoutCancel(r.Context())
-
-		stream := h.streams.Get(runID)
-		if stream == nil {
-			return
-		}
-
-		select {
-		case <-stream.Ready():
-		case <-time.After(60 * time.Second):
-			h.sessions.AddMessage(sessionID, session.Message{
-				Role:    "assistant",
-				Content: "Error: timeout waiting for response",
-				Time:    time.Now(),
-			})
-			h.sessions.ClearActiveRunID(sessionID)
-			h.streams.PublishError(runID, "timeout")
-			return
-		case <-ctx.Done():
-			return
-		}
-
-		if def == nil {
-			errMsg := fmt.Sprintf("agent %q not found", sess.AgentID)
-			h.streams.PublishError(runID, errMsg)
-
-			h.sessions.AddMessage(sessionID, session.Message{
-				Role:    "assistant",
-				Content: "Error: " + errMsg,
-				Time:    time.Now(),
-			})
-			h.sessions.ClearActiveRunID(sessionID)
-
-			time.AfterFunc(30*time.Second, func() {
-				h.streams.Delete(runID)
-			})
-			return
-		}
-
-		h.streams.PublishStatus(runID, "Thinking...")
-
-		allMsgs := h.sessions.Get(sessionID).Messages
-		var history []llm.Message
-		for i := 0; i < len(allMsgs)-1; i++ {
-			m := allMsgs[i]
-			history = append(history, llm.Message{Role: m.Role, Content: m.Content})
-		}
-
-		agentResult, err := h.temporal.ExecuteWorkflowSync(ctx, temporal.RunAgentParams{
-			AgentID:       def.AgentID,
-			AgentName:     def.Name,
-			Message:       req.Message,
-			History:       history,
-			StreamID:      runID,
-			LLMConfig:     h.buildLLMConfig(ctx, def),
-		MemoryEnabled:       def.MemoryEnabled,
-		MemorySearchAgentID: def.MemorySearchAgentID,
-		MemoryIngestAgentID: def.MemoryIngestAgentID,
-		UserSubject:         ac.Subject,		})
-		if err != nil {
-			slog.Error("agent run failed", "agent", sess.AgentID, "error", err)
-
-			h.sessions.AddMessage(sessionID, session.Message{
-				Role:    "assistant",
-				Content: "Error: " + err.Error(),
-				Time:    time.Now(),
-			})
-			h.sessions.ClearActiveRunID(sessionID)
-
-			h.streams.PublishError(runID, "Error: "+err.Error())
-
-			time.AfterFunc(30*time.Second, func() {
-				h.streams.Delete(runID)
-			})
-			return
-		}
-
-		h.sessions.AddMessage(sessionID, session.Message{
-			Role:    "assistant",
-			Content: agentResult.Response,
-			Time:    time.Now(),
-		})
-		h.sessions.ClearActiveRunID(sessionID)
-
-		h.streams.PublishDone(runID, agentResult.Response)
-
-		time.AfterFunc(30*time.Second, func() {
-			h.streams.Delete(runID)
-		})
-	}()
-
-	writeJSON(w, http.StatusCreated, postMessageResponse{RunID: runID})
-}
 
 func (h *Handler) runEvents(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("id")
 
-	sess := h.sessions.FindByRunID(runID)
-	if sess == nil {
+	ru, ok := h.runs.Get(runID)
+	if !ok {
 		http.Error(w, "run not found", http.StatusNotFound)
 		return
 	}
 
 	ac := auth.FromContext(r)
-	if ac == nil || sess.Owner != ac.Subject {
+	if ac == nil || ru.Owner != ac.Subject {
 		http.Error(w, "run not found", http.StatusNotFound)
 		return
 	}
@@ -947,17 +873,16 @@ func (h *Handler) runEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	strm := h.streams.Get(runID)
 	var ch <-chan stream.Event
 	var unsubscribe func()
 	if lastID := r.Header.Get("Last-Event-ID"); lastID != "" {
 		if id, err := strconv.ParseInt(lastID, 10, 64); err == nil {
-			ch, unsubscribe = strm.SubscribeFrom(id)
+			ch, unsubscribe = runStream.SubscribeFrom(id)
 		} else {
-			ch, unsubscribe = strm.Subscribe()
+			ch, unsubscribe = runStream.Subscribe()
 		}
 	} else {
-		ch, unsubscribe = strm.SubscribeFrom(strm.LatestID())
+		ch, unsubscribe = runStream.SubscribeFrom(0)
 	}
 	defer unsubscribe()
 
@@ -989,10 +914,6 @@ func (h *Handler) runEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-}
-
-func newRunID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
 
 // --- Raw agent update (kept for backward compatibility) ---

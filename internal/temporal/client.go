@@ -40,6 +40,7 @@ type RunAgentParams struct {
 	MCPServers     []mcpclient.ServerConfig `json:"mcp_servers,omitempty"`
 	ResponseSchema *config.StructuredOutput `json:"response_schema,omitempty"`
 	StreamID       string                   `json:"stream_id,omitempty"`
+	SessionID      string                   `json:"session_id,omitempty"`
 	LLMConfig           *LLMConfigInput          `json:"llm_config,omitempty"`
 	MemoryEnabled       bool                     `json:"memory_enabled,omitempty"`
 	MemorySearchAgentID string                   `json:"memory_search_agent_id,omitempty"`
@@ -81,10 +82,10 @@ func NewClient(hostPort, namespace, apiKey string) (*Client, error) {
 }
 
 func (c *Client) runType(params *RunAgentParams) string {
-	if params.StreamID != "" {
-		return "chat"
+	if params.SessionID != "" {
+		return "session"
 	}
-	return "direct"
+	return "stateless"
 }
 
 func (c *Client) searchAttrs(params *RunAgentParams) map[string]interface{} {
