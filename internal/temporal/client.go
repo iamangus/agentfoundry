@@ -46,6 +46,7 @@ type RunAgentParams struct {
 	MemorySearchAgentID string                   `json:"memory_search_agent_id,omitempty"`
 	MemoryIngestAgentID string                   `json:"memory_ingest_agent_id,omitempty"`
 	UserSubject         string                   `json:"user_subject,omitempty"`
+	HandoffCount        int                      `json:"handoff_count,omitempty"`
 }
 
 type RunAgentResult struct {
