@@ -9,4 +9,5 @@ var (
 	ErrMissingSystemPrompt = errors.New("definition: system_prompt is required")
 	ErrInvalidScope        = errors.New("definition: scope must be 'global', 'team', or 'user'")
 	ErrTeamRequired        = errors.New("definition: team is required when scope is 'team'")
+	ErrSelfHandoff         = errors.New("definition: handoff target cannot be the agent itself")
 )

@@ -185,6 +185,19 @@ func (h *Handler) getAgentByID(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, def)
 }
 
+func (h *Handler) validateHandoffTargets(def *config.Definition) error {
+	if def.HandoffTo != "" {
+		if h.store.GetDefinition(def.HandoffTo) == nil {
+			return fmt.Errorf("handoff target %q not found", def.HandoffTo)
+		}
+	}
+	for _, tname := range def.Handoffs {
+		if h.store.GetDefinition(tname) == nil {
+			return fmt.Errorf("handoff target %q not found", tname)
+		}
+	}
+	return nil
+}
 func (h *Handler) createAgent(w http.ResponseWriter, r *http.Request) {
 	ac := auth.FromContext(r)
 	if ac == nil {
@@ -214,6 +227,10 @@ func (h *Handler) createAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := h.validateHandoffTargets(&def); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	switch config.Scope(def.Scope) {
 	case config.ScopeGlobal:
 		if !ac.IsGlobalAdmin {
@@ -310,6 +327,10 @@ func (h *Handler) updateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := h.validateHandoffTargets(&def); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	if config.Scope(def.Scope) != config.ScopeTeam {
 		def.Team = ""
 	}

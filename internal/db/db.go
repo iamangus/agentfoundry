@@ -117,6 +117,8 @@ func (p *Pool) Migrate(ctx context.Context) error {
 		`ALTER TABLE agent_definitions ADD COLUMN IF NOT EXISTS memory_ingest_agent_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE agent_definitions ADD COLUMN IF NOT EXISTS tool_overrides JSONB NOT NULL DEFAULT '{}'`,
 		`ALTER TABLE agent_definitions ADD COLUMN IF NOT EXISTS model_params JSONB DEFAULT '{}'`,
+		`ALTER TABLE agent_definitions ADD COLUMN IF NOT EXISTS handoff_to TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE agent_definitions ADD COLUMN IF NOT EXISTS handoffs JSONB NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS tool_overrides JSONB NOT NULL DEFAULT '{}'`,
 		`ALTER TABLE inference_providers ADD COLUMN IF NOT EXISTS reasoning JSONB DEFAULT '{}'`,
 

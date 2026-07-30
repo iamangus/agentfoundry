@@ -61,3 +61,67 @@ system_prompt: Hello.
 		t.Errorf("expected StructuredOutput to be nil, got %+v", def.StructuredOutput)
 	}
 }
+
+func TestHandoff_YAMLRoundTrip(t *testing.T) {
+	input := `kind: agent
+name: triage
+system_prompt: You triage requests.
+handoff_to: resolver
+handoffs:
+    - billing
+    - support
+`
+	var def config.Definition
+	if err := yaml.Unmarshal([]byte(input), &def); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if def.HandoffTo != "resolver" {
+		t.Errorf("got HandoffTo=%q, want %q", def.HandoffTo, "resolver")
+	}
+	if len(def.Handoffs) != 2 || def.Handoffs[0] != "billing" || def.Handoffs[1] != "support" {
+		t.Errorf("got Handoffs=%v, want [billing support]", def.Handoffs)
+	}
+}
+
+func validHandoffDefinition() *config.Definition {
+	return &config.Definition{
+		Kind:         config.KindAgent,
+		Name:         "agent",
+		SystemPrompt: "hello",
+	}
+}
+
+func TestValidate_SelfHandoffRejected(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*config.Definition)
+	}{
+		{"HandoffTo equals name", func(d *config.Definition) { d.HandoffTo = d.Name }},
+		{"Handoffs contains name", func(d *config.Definition) { d.Handoffs = []string{d.Name} }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			def := validHandoffDefinition()
+			tc.mutate(def)
+			if err := def.Validate(); err == nil {
+				t.Fatal("expected Validate to reject self-handoff, got nil")
+			}
+		})
+	}
+}
+
+func TestValidate_HandoffOK(t *testing.T) {
+	def := validHandoffDefinition()
+	def.HandoffTo = "other"
+	def.Handoffs = []string{"other", "another"}
+	if err := def.Validate(); err != nil {
+		t.Fatalf("expected Validate to accept non-self handoffs, got %v", err)
+	}
+}
+
+func TestValidate_NoHandoffOK(t *testing.T) {
+	def := validHandoffDefinition()
+	if err := def.Validate(); err != nil {
+		t.Fatalf("expected Validate to accept no handoffs, got %v", err)
+	}
+}
