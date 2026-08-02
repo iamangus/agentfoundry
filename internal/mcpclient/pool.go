@@ -3,6 +3,7 @@ package mcpclient
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -54,6 +55,11 @@ type connection struct {
 	client *client.Client
 	config ServerConfig
 	tools  []mcp.Tool
+
+	// reinitMu serializes session re-initialization attempts so concurrent
+	// callers that hit a terminated session don't stampede the server with
+	// redundant initialize handshakes.
+	reinitMu sync.Mutex
 }
 
 // Pool manages connections to external MCP servers and provides
@@ -319,11 +325,96 @@ func (p *Pool) CallTool(ctx context.Context, serverName, toolName string, argume
 			Arguments: arguments,
 		},
 	})
+	if err != nil && errors.Is(err, mcptransport.ErrSessionTerminated) {
+		result, err = p.recoverFromTerminatedSession(ctx, conn, serverName, toolName, arguments, err)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("call tool %s.%s: %w", serverName, toolName, err)
 	}
 
 	return result, nil
+}
+
+// recoverFromTerminatedSession re-initializes a connection whose MCP session
+// was terminated server-side (e.g. the server restarted) and retries the tool
+// call once. Re-initialization happens in place so persistent and ephemeral
+// connections that share the client stay consistent.
+func (p *Pool) recoverFromTerminatedSession(ctx context.Context, conn *connection, serverName, toolName string, arguments map[string]any, origErr error) (*mcp.CallToolResult, error) {
+	slog.Warn("MCP session terminated, re-initializing", "server", serverName, "tool", toolName, "error", origErr)
+
+	conn.reinitMu.Lock()
+	defer conn.reinitMu.Unlock()
+
+	newTools, rerr := reinitSession(ctx, conn.client)
+	if rerr != nil {
+		slog.Error("failed to re-initialize MCP session", "server", serverName, "error", rerr)
+		return nil, rerr
+	}
+
+	p.mu.Lock()
+	changed := toolsChanged(conn.tools, newTools)
+	conn.tools = newTools
+	p.mu.Unlock()
+	if changed && p.onChange != nil {
+		p.onChange()
+	}
+
+	slog.Info("MCP session re-initialized, retrying tool call", "server", serverName, "tool", toolName)
+	return conn.client.CallTool(ctx, mcp.CallToolRequest{
+		Params: mcp.CallToolParams{
+			Name:      toolName,
+			Arguments: arguments,
+		},
+	})
+}
+
+// reinitSession re-establishes a terminated MCP session on an existing client
+// and returns the freshly discovered tool list. mcp-go clears its session ID
+// when the server reports a session as terminated, so a fresh initialize
+// handshake mints a new session on the server.
+func reinitSession(ctx context.Context, cl *client.Client) ([]mcp.Tool, error) {
+	initCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	_, err := cl.Initialize(initCtx, mcp.InitializeRequest{
+		Params: mcp.InitializeParams{
+			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
+			ClientInfo: mcp.Implementation{
+				Name:    "agentfoundry",
+				Version: "0.1.0",
+			},
+			Capabilities: mcp.ClientCapabilities{},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("re-initialize MCP session: %w", err)
+	}
+
+	toolsCtx, toolsCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer toolsCancel()
+
+	toolsResult, err := cl.ListTools(toolsCtx, mcp.ListToolsRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("re-discover tools: %w", err)
+	}
+	return toolsResult.Tools, nil
+}
+
+// toolsChanged reports whether two tool lists differ by name.
+func toolsChanged(a, b []mcp.Tool) bool {
+	if len(a) != len(b) {
+		return true
+	}
+	names := make(map[string]bool, len(a))
+	for _, t := range a {
+		names[t.Name] = true
+	}
+	for _, t := range b {
+		if !names[t.Name] {
+			return true
+		}
+	}
+	return false
 }
 
 // ListServerNames returns the names of all connected servers (persistent + ephemeral).
@@ -441,12 +532,30 @@ func (e *EphemeralConn) ListTools() []DiscoveredTool {
 
 // CallTool invokes a tool on this ephemeral server.
 func (e *EphemeralConn) CallTool(ctx context.Context, toolName string, arguments map[string]any) (*mcp.CallToolResult, error) {
-	return e.client.CallTool(ctx, mcp.CallToolRequest{
+	result, err := e.client.CallTool(ctx, mcp.CallToolRequest{
 		Params: mcp.CallToolParams{
 			Name:      toolName,
 			Arguments: arguments,
 		},
 	})
+	if err != nil && errors.Is(err, mcptransport.ErrSessionTerminated) {
+		slog.Warn("ephemeral MCP session terminated, re-initializing", "server", e.config.Name, "tool", toolName, "error", err)
+		newTools, rerr := reinitSession(ctx, e.client)
+		if rerr != nil {
+			return nil, rerr
+		}
+		e.tools = newTools
+		result, err = e.client.CallTool(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Name:      toolName,
+				Arguments: arguments,
+			},
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // Close shuts down the ephemeral MCP connection.
