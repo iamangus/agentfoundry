@@ -771,9 +771,17 @@ type mcpCallRequest struct {
 	Arguments map[string]any `json:"arguments"`
 }
 
+type ContentBlock struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	Data     string `json:"data,omitempty"`
+	MIMEType string `json:"mime_type,omitempty"`
+}
+
 type mcpCallResponse struct {
-	Content string `json:"content"`
-	IsError bool   `json:"is_error"`
+	Content       string         `json:"content"`
+	ContentBlocks []ContentBlock `json:"content_blocks,omitempty"`
+	IsError       bool           `json:"is_error"`
 }
 
 func (h *Handler) mcpProxyCall(w http.ResponseWriter, r *http.Request) {
@@ -789,18 +797,23 @@ func (h *Handler) mcpProxyCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	content := extractMCPText(result)
-	writeJSON(w, http.StatusOK, mcpCallResponse{Content: content, IsError: result.IsError})
+	content, blocks := extractMCPContent(result)
+	writeJSON(w, http.StatusOK, mcpCallResponse{Content: content, ContentBlocks: blocks, IsError: result.IsError})
 }
 
-func extractMCPText(result *mcp.CallToolResult) string {
+func extractMCPContent(result *mcp.CallToolResult) (string, []ContentBlock) {
 	var parts []string
+	var blocks []ContentBlock
 	for _, c := range result.Content {
-		if tc, ok := c.(mcp.TextContent); ok {
-			parts = append(parts, tc.Text)
+		switch b := c.(type) {
+		case mcp.TextContent:
+			parts = append(parts, b.Text)
+			blocks = append(blocks, ContentBlock{Type: "text", Text: b.Text})
+		case mcp.ImageContent:
+			blocks = append(blocks, ContentBlock{Type: "image", Data: b.Data, MIMEType: b.MIMEType})
 		}
 	}
-	return strings.Join(parts, "\n")
+	return strings.Join(parts, "\n"), blocks
 }
 
 // --- Chat session endpoints ---
