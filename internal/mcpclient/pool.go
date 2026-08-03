@@ -69,6 +69,18 @@ type Pool struct {
 	conns     map[string]*connection // server name -> persistent connection
 	ephemeral map[string]*connection // server name -> ephemeral connection (shadows conns)
 
+	// desired holds the ServerConfigs we intend to keep connected. Servers are
+	// registered here by Connect/ConnectDynamic even if the initial connection
+	// fails, so the reconciler can retry them until they come up.
+	desired map[string]ServerConfig
+
+	// connectMu serializes connectOne attempts so the reconciler and the
+	// connect methods never race on the same server.
+	connectMu sync.Mutex
+
+	startOnce sync.Once
+	stopCh    chan struct{}
+
 	// onChange is called whenever the tool list changes (from any server).
 	onChange func()
 }
@@ -78,6 +90,8 @@ func NewPool() *Pool {
 	return &Pool{
 		conns:     make(map[string]*connection),
 		ephemeral: make(map[string]*connection),
+		desired:   make(map[string]ServerConfig),
+		stopCh:    make(chan struct{}),
 	}
 }
 
@@ -87,15 +101,18 @@ func (p *Pool) OnToolsChanged(fn func()) {
 }
 
 // Connect establishes connections to all configured MCP servers,
-// initializes sessions, and discovers tools.
+// initializes sessions, and discovers tools. All servers are recorded as
+// desired so the reconciler keeps them connected across restarts.
 func (p *Pool) Connect(ctx context.Context, servers []ServerConfig) error {
 	for _, srv := range servers {
+		p.addDesired(srv)
 		if err := p.connectOne(ctx, srv); err != nil {
 			slog.Error("failed to connect to MCP server", "name", srv.Name, "url", srv.URL, "error", err)
 			// Continue connecting to other servers; don't fail hard.
 			continue
 		}
 	}
+	p.startReconciler()
 	return nil
 }
 
@@ -193,6 +210,77 @@ func (p *Pool) connectOne(ctx context.Context, srv ServerConfig) error {
 	slog.Info("connected to MCP server", "name", srv.Name, "tools", toolNames)
 
 	return nil
+}
+
+// addDesired records a server as one we want to keep connected.
+func (p *Pool) addDesired(srv ServerConfig) {
+	p.mu.Lock()
+	p.desired[srv.Name] = srv
+	p.mu.Unlock()
+}
+
+// removeDesired drops a server from the desired set.
+func (p *Pool) removeDesired(name string) {
+	p.mu.Lock()
+	delete(p.desired, name)
+	p.mu.Unlock()
+}
+
+// startReconciler launches the background loop that keeps desired servers
+// connected and re-discovers their tools.
+func (p *Pool) startReconciler() {
+	p.startOnce.Do(func() {
+		go p.reconcileLoop()
+	})
+}
+
+// reconcileLoop periodically checks that all desired servers are connected.
+// A server that failed at startup or whose connection died (e.g. the pod
+// restarted) is reconnected here, and its tools re-discovered, so newly
+// available MCP servers show up in ListAllTools without waiting for a manual
+// refresh. Without this, a transient failure at boot permanently hides that
+// server's tools from the worker until the orchestrator restarts.
+func (p *Pool) reconcileLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-p.stopCh:
+			return
+		case <-ticker.C:
+			p.reconcile()
+		}
+	}
+}
+
+// reconcile attempts to connect any desired server that isn't connected.
+func (p *Pool) reconcile() {
+	p.mu.RLock()
+	targets := make([]ServerConfig, 0, len(p.desired))
+	for _, srv := range p.desired {
+		targets = append(targets, srv)
+	}
+	p.mu.RUnlock()
+
+	for _, srv := range targets {
+		p.mu.RLock()
+		_, hasConn := p.conns[srv.Name]
+		_, hasEph := p.ephemeral[srv.Name]
+		p.mu.RUnlock()
+		if hasConn || hasEph {
+			continue
+		}
+
+		p.connectMu.Lock()
+		err := p.connectOne(context.Background(), srv)
+		p.connectMu.Unlock()
+		if err != nil {
+			slog.Warn("reconciler failed to connect to MCP server", "name", srv.Name, "error", err)
+		} else if p.onChange != nil {
+			p.onChange()
+		}
+	}
 }
 
 // refreshTools re-fetches the tool list from a specific server.
@@ -595,14 +683,22 @@ func (p *Pool) UnregisterEphemeral(name string) {
 }
 
 // ConnectDynamic connects to an MCP server at runtime and adds it to the pool.
-// Returns an error if the connection fails.
+// Returns an error if the connection fails. The server is recorded as desired
+// so the reconciler reconnects it if it goes down or if this initial attempt
+// fails.
 func (p *Pool) ConnectDynamic(ctx context.Context, srv ServerConfig) error {
-	return p.connectOne(ctx, srv)
+	p.addDesired(srv)
+	p.connectMu.Lock()
+	err := p.connectOne(ctx, srv)
+	p.connectMu.Unlock()
+	p.startReconciler()
+	return err
 }
 
 // DisconnectDynamic removes an MCP server from the pool by name and closes its
 // connection. If the server is not in the pool this is a no-op.
 func (p *Pool) DisconnectDynamic(name string) {
+	p.removeDesired(name)
 	p.mu.Lock()
 	conn, ok := p.conns[name]
 	if !ok {
@@ -645,6 +741,12 @@ func (p *Pool) RefreshServer(name string) {
 
 // Close shuts down all MCP client connections.
 func (p *Pool) Close() {
+	select {
+	case <-p.stopCh:
+	default:
+		close(p.stopCh)
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -658,4 +760,5 @@ func (p *Pool) Close() {
 	}
 	p.ephemeral = make(map[string]*connection)
 	p.conns = make(map[string]*connection)
+	p.desired = make(map[string]ServerConfig)
 }

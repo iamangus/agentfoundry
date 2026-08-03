@@ -3,7 +3,9 @@ package api
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -195,7 +197,13 @@ func (h *Handler) inferenceProxy(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 		if err := scanner.Err(); err != nil {
-			slog.Error("inference proxy read error", "error", err)
+			if errors.Is(err, context.Canceled) {
+				// The client closed the stream (e.g. the worker moved on to
+				// handle tool calls). This is expected, not an error.
+				slog.Debug("inference proxy read ended (client canceled)", "agent_id", agentID)
+			} else {
+				slog.Error("inference proxy read error", "error", err)
+			}
 		}
 	} else {
 		io.Copy(w, resp.Body)
