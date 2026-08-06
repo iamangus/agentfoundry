@@ -916,7 +916,7 @@ func (h *Handler) runEvents(w http.ResponseWriter, r *http.Request) {
 			ch, unsubscribe = runStream.Subscribe()
 		}
 	} else {
-		ch, unsubscribe = runStream.SubscribeFrom(0)
+		ch, unsubscribe = runStream.Subscribe()
 	}
 	defer unsubscribe()
 

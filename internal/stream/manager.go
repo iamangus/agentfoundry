@@ -40,26 +40,32 @@ func (s *Stream) publish(evt Event) {
 }
 
 func (s *Stream) Subscribe() (<-chan Event, func()) {
-	return s.subscribeFrom(0)
+	return s.subscribeFrom(-1)
 }
 
 func (s *Stream) subscribeFrom(fromID int64) (<-chan Event, func()) {
-	ch := make(chan Event, subBufferSize)
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var replay []Event
 	for _, evt := range s.events {
 		if evt.ID > fromID {
-			ch <- evt
+			replay = append(replay, evt)
 		}
 	}
+
+	ch := make(chan Event, len(replay)+subBufferSize)
+	for _, evt := range replay {
+		ch <- evt
+	}
+
 	if s.closed {
 		close(ch)
-		s.mu.Unlock()
 		return ch, func() {}
 	}
-	s.subs = append(s.subs, ch)
-	s.mu.Unlock()
 
-	unsubscribe := func() {
+	s.subs = append(s.subs, ch)
+	return ch, func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		for i, sub := range s.subs {
@@ -69,7 +75,6 @@ func (s *Stream) subscribeFrom(fromID int64) (<-chan Event, func()) {
 			}
 		}
 	}
-	return ch, unsubscribe
 }
 
 func (s *Stream) SubscribeFrom(eventID int64) (<-chan Event, func()) {

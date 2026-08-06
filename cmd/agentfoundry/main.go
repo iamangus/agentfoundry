@@ -172,8 +172,10 @@ func main() {
 	}
 
 	server := &http.Server{
-		Addr:    cfg.Listen,
-		Handler: handler,
+		Addr:              cfg.Listen,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
