@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"encoding/json"
+	"os"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -123,5 +124,28 @@ func TestValidate_NoHandoffOK(t *testing.T) {
 	def := validHandoffDefinition()
 	if err := def.Validate(); err != nil {
 		t.Fatalf("expected Validate to accept no handoffs, got %v", err)
+	}
+}
+
+func TestShippedDefinitionsParse(t *testing.T) {
+	paths := []string{
+		"../../definitions/assistant.yaml",
+		"../../definitions/summarizer.yaml",
+		"../../definitions/researcher.yaml",
+		"../../definitions/historian.yaml",
+	}
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			t.Skipf("definitions dir not available: %v", err)
+		}
+		var def config.Definition
+		if err := yaml.Unmarshal(data, &def); err != nil {
+			t.Errorf("%s: unmarshal: %v", p, err)
+			continue
+		}
+		if def.Kind != config.KindAgent || def.Name == "" {
+			t.Errorf("%s: invalid definition", p)
+		}
 	}
 }

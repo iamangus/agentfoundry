@@ -21,6 +21,7 @@ type Run struct {
 	Status     Status    `json:"status"`
 	Response   string    `json:"response,omitempty"`
 	Error      string    `json:"error,omitempty"`
+	TaskID     string    `json:"task_id,omitempty"`
 	WorkflowID string    `json:"-"`
 	CreatedAt  time.Time `json:"created_at"`
 	Owner      string    `json:"-"`
@@ -36,7 +37,7 @@ func New() *Store {
 	return &Store{runs: make(map[string]*Run)}
 }
 
-func (s *Store) Create(agentName, owner, sessionID string) *Run {
+func (s *Store) Create(agentName, owner, sessionID, taskID string) *Run {
 	r := &Run{
 		ID:        newID(),
 		AgentName: agentName,
@@ -44,6 +45,7 @@ func (s *Store) Create(agentName, owner, sessionID string) *Run {
 		CreatedAt: time.Now(),
 		Owner:     owner,
 		SessionID: sessionID,
+		TaskID:    taskID,
 	}
 	s.mu.Lock()
 	s.runs[r.ID] = r
@@ -56,6 +58,20 @@ func (s *Store) Get(id string) (*Run, bool) {
 	defer s.mu.Unlock()
 	r, ok := s.runs[id]
 	return r, ok
+}
+
+// ListByTaskID returns all runs associated with a background task id (eve
+// uses this to rediscover in-flight task runs after a restart).
+func (s *Store) ListByTaskID(taskID string) []*Run {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]*Run, 0)
+	for _, r := range s.runs {
+		if r.TaskID == taskID {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func (s *Store) UpdateStatus(id string, status Status, response, errMsg string) error {

@@ -84,6 +84,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/agents/{name}", h.updateAgent)
 	mux.HandleFunc("DELETE /api/v1/agents/{name}", h.deleteAgent)
 	mux.HandleFunc("POST /api/v1/agents/{name}/run", h.runAgent)
+	mux.HandleFunc("GET /api/v1/runs", h.listRunsByTaskID)
 	mux.HandleFunc("GET /api/v1/runs/{id}", h.getRunStatus)
 	mux.HandleFunc("POST /api/v1/runs/{id}/cancel", h.cancelRun)
 	mux.HandleFunc("GET /api/v1/runs/{id}/events", h.runEvents)
@@ -541,6 +542,7 @@ type runAgentRequest struct {
 	Message        string                   `json:"message"`
 	History        []llm.Message            `json:"history,omitempty"`
 	SessionID      string                   `json:"session_id,omitempty"`
+	TaskID         string                   `json:"task_id,omitempty"`
 	MCPServers     []mcpclient.ServerConfig `json:"mcp_servers,omitempty"`
 	ResponseSchema *config.StructuredOutput `json:"response_schema,omitempty"`
 }
@@ -613,7 +615,7 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 		ephemeralNames = append(ephemeralNames, srv.Name)
 	}
 
-	newRun := h.runs.Create(def.Name, ac.Subject, sessionID)
+	newRun := h.runs.Create(def.Name, ac.Subject, sessionID, req.TaskID)
 	h.streams.Create(newRun.ID)
 	if sessionID != "" {
 		h.sessions.SetActiveRunID(sessionID, newRun.ID)
@@ -707,6 +709,22 @@ func (h *Handler) getRunStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, ru)
+}
+
+// listRunsByTaskID returns the run associated with a background task id, so
+// eve can rediscover in-flight task runs after its own restart.
+func (h *Handler) listRunsByTaskID(w http.ResponseWriter, r *http.Request) {
+	taskID := r.URL.Query().Get("task_id")
+	if taskID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "task_id query parameter is required"})
+		return
+	}
+	runs := h.runs.ListByTaskID(taskID)
+	if len(runs) == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no run found for task"})
+		return
+	}
+	writeJSON(w, http.StatusOK, runs[0])
 }
 
 func (h *Handler) cancelRun(w http.ResponseWriter, r *http.Request) {
