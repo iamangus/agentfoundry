@@ -151,7 +151,7 @@ curl -s -X POST \
   "$UI_HOST/api/v1/providers"
 ```
 
-The `provider_type` field accepts: `openai`, `anthropic`, `openrouter`, `ollama`, or `custom`.
+The `provider_type` field accepts: `openai`, `anthropic`, `openrouter`, `ollama`, `llama-server`, or `custom`.
 
 API keys are masked in GET/LIST responses. Providers support the same `user`/`team`/`global` scoping model as agents.
 

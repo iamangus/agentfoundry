@@ -40,6 +40,12 @@ llm:
 #     api_key: "ollama"
 #     default_model: "llama3"
 #
+# llama.cpp llama-server (local):
+#   llm:
+#     base_url: "http://localhost:8080/v1"
+#     api_key: "llama-server"
+#     default_model: "meta-llama/Meta-Llama-3.1-8B-Instruct"
+#
 # Azure OpenAI:
 #   llm:
 #     base_url: "https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT"
