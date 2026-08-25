@@ -84,6 +84,55 @@ handoffs:
 	}
 }
 
+func TestPreInferenceProcessors_YAMLRoundTrip(t *testing.T) {
+	input := `kind: agent
+name: notes-agent
+system_prompt: You manage notes.
+pre_inference_processors:
+  - id: note-skills
+    processor: mcp_tool
+    phase: run_start
+    on_error: warn
+    timeout: 5
+    config:
+      server: notes
+      tool: list_skills
+      arguments:
+        include_metadata: true
+`
+	var def config.Definition
+	if err := yaml.Unmarshal([]byte(input), &def); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(def.PreInferenceProcessors) != 1 {
+		t.Fatalf("got %d processors, want 1", len(def.PreInferenceProcessors))
+	}
+	p := def.PreInferenceProcessors[0]
+	if p.ID != "note-skills" || p.Processor != "mcp_tool" || p.Phase != "run_start" || p.OnError != "warn" || p.Timeout != 5 {
+		t.Fatalf("unexpected processor: %+v", p)
+	}
+	var processorConfig map[string]any
+	if err := json.Unmarshal(p.Config, &processorConfig); err != nil {
+		t.Fatalf("unmarshal processor config: %v", err)
+	}
+	if processorConfig["server"] != "notes" || processorConfig["tool"] != "list_skills" {
+		t.Fatalf("unexpected processor config: %v", processorConfig)
+	}
+}
+
+func TestValidate_PreInferenceProcessor(t *testing.T) {
+	def := validHandoffDefinition()
+	def.PreInferenceProcessors = []config.PreInferenceProcessor{{Processor: "mcp_tool", Phase: "before_inference"}}
+	if err := def.Validate(); err == nil {
+		t.Fatal("expected unsupported phase to fail validation")
+	}
+
+	def.PreInferenceProcessors = []config.PreInferenceProcessor{{Processor: "mcp_tool", Phase: "run_start", OnError: "invalid"}}
+	if err := def.Validate(); err == nil {
+		t.Fatal("expected invalid on_error to fail validation")
+	}
+}
+
 func validHandoffDefinition() *config.Definition {
 	return &config.Definition{
 		Kind:         config.KindAgent,

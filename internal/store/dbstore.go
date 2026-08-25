@@ -19,8 +19,8 @@ type AgentRegistrar interface {
 }
 
 type DBStore struct {
-	pool  *pgxpool.Pool
-	reg   AgentRegistrar
+	pool *pgxpool.Pool
+	reg  AgentRegistrar
 }
 
 func NewDBStore(pool *pgxpool.Pool, reg AgentRegistrar) *DBStore {
@@ -33,7 +33,7 @@ func NewDBStore(pool *pgxpool.Pool, reg AgentRegistrar) *DBStore {
 func (s *DBStore) LoadAll(ctx context.Context) error {
 	rows, err := s.pool.Query(ctx, `SELECT agent_id, name, kind, description, model, system_prompt, tools,
 			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id,
-			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params, handoff_to, handoffs
+			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params, handoff_to, handoffs, pre_inference_processors
 			FROM agent_definitions ORDER BY name`)
 	if err != nil {
 		return fmt.Errorf("query agent definitions: %w", err)
@@ -43,57 +43,58 @@ func (s *DBStore) LoadAll(ctx context.Context) error {
 	count := 0
 	for rows.Next() {
 		var row struct {
-			AgentID            string
-			Name               string
-			Kind               string
-			Description        string
-			Model              string
-			SystemPrompt       string
-			Tools              []byte
-			MaxTurns           int
-			MaxConcurrentTools int
-			ForceJSON          bool
-			StructuredOutput   []byte
-			Scope              string
-			Team               string
-			CreatedBy          string
-			ProviderID         string
-			MemoryEnabled      bool
-			MemorySearchAgentID string
-			MemoryIngestAgentID string
-			ToolOverrides       []byte
-			ModelParams          []byte
-		HandoffTo            string
-		Handoffs             []byte
+			AgentID                string
+			Name                   string
+			Kind                   string
+			Description            string
+			Model                  string
+			SystemPrompt           string
+			Tools                  []byte
+			MaxTurns               int
+			MaxConcurrentTools     int
+			ForceJSON              bool
+			StructuredOutput       []byte
+			Scope                  string
+			Team                   string
+			CreatedBy              string
+			ProviderID             string
+			MemoryEnabled          bool
+			MemorySearchAgentID    string
+			MemoryIngestAgentID    string
+			ToolOverrides          []byte
+			ModelParams            []byte
+			HandoffTo              string
+			Handoffs               []byte
+			PreInferenceProcessors []byte
 		}
 		if err := rows.Scan(&row.AgentID, &row.Name, &row.Kind, &row.Description, &row.Model,
 			&row.SystemPrompt, &row.Tools, &row.MaxTurns, &row.MaxConcurrentTools, &row.ForceJSON,
 			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID,
-			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides, &row.ModelParams, &row.HandoffTo, &row.Handoffs); err != nil {
+			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides, &row.ModelParams, &row.HandoffTo, &row.Handoffs, &row.PreInferenceProcessors); err != nil {
 			slog.Error("failed to scan agent definition row", "error", err)
 			continue
 		}
 
 		def := &config.Definition{
-			AgentID:            row.AgentID,
-			Kind:               config.Kind(row.Kind),
-			Name:               row.Name,
-			Description:        row.Description,
-			Model:              row.Model,
-			SystemPrompt:       row.SystemPrompt,
-			MaxTurns:           row.MaxTurns,
-			MaxConcurrentTools: row.MaxConcurrentTools,
-			ForceJSON:          row.ForceJSON,
-			Scope:              row.Scope,
-			Team:               row.Team,
-			CreatedBy:          row.CreatedBy,
-			ProviderID:         row.ProviderID,
-			MemoryEnabled:        row.MemoryEnabled,
-			MemorySearchAgentID:  row.MemorySearchAgentID,
-			MemoryIngestAgentID:  row.MemoryIngestAgentID,
-			ToolOverrides:        row.ToolOverrides,
-			ModelParams:          row.ModelParams,
-		HandoffTo:            row.HandoffTo,
+			AgentID:             row.AgentID,
+			Kind:                config.Kind(row.Kind),
+			Name:                row.Name,
+			Description:         row.Description,
+			Model:               row.Model,
+			SystemPrompt:        row.SystemPrompt,
+			MaxTurns:            row.MaxTurns,
+			MaxConcurrentTools:  row.MaxConcurrentTools,
+			ForceJSON:           row.ForceJSON,
+			Scope:               row.Scope,
+			Team:                row.Team,
+			CreatedBy:           row.CreatedBy,
+			ProviderID:          row.ProviderID,
+			MemoryEnabled:       row.MemoryEnabled,
+			MemorySearchAgentID: row.MemorySearchAgentID,
+			MemoryIngestAgentID: row.MemoryIngestAgentID,
+			ToolOverrides:       row.ToolOverrides,
+			ModelParams:         row.ModelParams,
+			HandoffTo:           row.HandoffTo,
 		}
 
 		if len(row.Tools) > 0 {
@@ -105,6 +106,12 @@ func (s *DBStore) LoadAll(ctx context.Context) error {
 		if len(row.Handoffs) > 0 {
 			if err := json.Unmarshal(row.Handoffs, &def.Handoffs); err != nil {
 				slog.Error("failed to unmarshal handoffs", "name", row.Name, "error", err)
+			}
+		}
+
+		if len(row.PreInferenceProcessors) > 0 {
+			if err := json.Unmarshal(row.PreInferenceProcessors, &def.PreInferenceProcessors); err != nil {
+				slog.Error("failed to unmarshal pre_inference_processors", "name", row.Name, "error", err)
 			}
 		}
 
@@ -168,13 +175,20 @@ func (s *DBStore) SaveDefinition(def *config.Definition) error {
 	if handoffsJSON == nil {
 		handoffsJSON = []byte("[]")
 	}
+	processorsJSON, err := json.Marshal(def.PreInferenceProcessors)
+	if err != nil {
+		return fmt.Errorf("marshal pre_inference_processors: %w", err)
+	}
+	if processorsJSON == nil {
+		processorsJSON = []byte("[]")
+	}
 
 	_, err = s.pool.Exec(ctx, `
 		INSERT INTO agent_definitions
 			(agent_id, name, kind, description, model, system_prompt, tools,
 			 max_turns, max_concurrent_tools, force_json, structured_output,
-			 scope, team, created_by, provider_id, memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params, handoff_to, handoffs, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, NOW())
+			 scope, team, created_by, provider_id, memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params, handoff_to, handoffs, pre_inference_processors, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, NOW())
 		ON CONFLICT (name) DO UPDATE SET
 			description         = EXCLUDED.description,
 			model               = EXCLUDED.model,
@@ -194,12 +208,13 @@ func (s *DBStore) SaveDefinition(def *config.Definition) error {
 			model_params           = EXCLUDED.model_params,
 			handoff_to             = EXCLUDED.handoff_to,
 			handoffs               = EXCLUDED.handoffs,
+			pre_inference_processors = EXCLUDED.pre_inference_processors,
 			updated_at          = NOW()
 	`, def.AgentID, def.Name, string(def.Kind), def.Description, def.Model,
 		def.SystemPrompt, toolsJSON, def.MaxTurns, def.MaxConcurrentTools,
 		def.ForceJSON, soJSON, def.Scope, def.Team, def.CreatedBy, def.ProviderID,
 		def.MemoryEnabled, def.MemorySearchAgentID, def.MemoryIngestAgentID, def.ToolOverrides, def.ModelParams,
-		def.HandoffTo, handoffsJSON,
+		def.HandoffTo, handoffsJSON, processorsJSON,
 	)
 	if err != nil {
 		return fmt.Errorf("save agent definition: %w", err)
@@ -227,62 +242,63 @@ func (s *DBStore) GetDefinition(name string) *config.Definition {
 	ctx := context.Background()
 
 	var row struct {
-		AgentID            string
-		Name               string
-		Kind               string
-		Description        string
-		Model              string
-		SystemPrompt       string
-		Tools              []byte
-		MaxTurns           int
-		MaxConcurrentTools int
-		ForceJSON          bool
-		StructuredOutput   []byte
-		Scope              string
-		Team               string
-		CreatedBy          string
-		ProviderID         string
-		MemoryEnabled        bool
-		MemorySearchAgentID  string
-		MemoryIngestAgentID  string
-		ToolOverrides        []byte
-		ModelParams          []byte
-		HandoffTo            string
-		Handoffs             []byte
+		AgentID                string
+		Name                   string
+		Kind                   string
+		Description            string
+		Model                  string
+		SystemPrompt           string
+		Tools                  []byte
+		MaxTurns               int
+		MaxConcurrentTools     int
+		ForceJSON              bool
+		StructuredOutput       []byte
+		Scope                  string
+		Team                   string
+		CreatedBy              string
+		ProviderID             string
+		MemoryEnabled          bool
+		MemorySearchAgentID    string
+		MemoryIngestAgentID    string
+		ToolOverrides          []byte
+		ModelParams            []byte
+		HandoffTo              string
+		Handoffs               []byte
+		PreInferenceProcessors []byte
 	}
 	err := s.pool.QueryRow(ctx, `
 		SELECT agent_id, name, kind, description, model, system_prompt, tools,
 			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id,
-			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params, handoff_to, handoffs
+			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params, handoff_to, handoffs, pre_inference_processors
 		FROM agent_definitions WHERE name = $1`, name).
 		Scan(&row.AgentID, &row.Name, &row.Kind, &row.Description, &row.Model,
 			&row.SystemPrompt, &row.Tools, &row.MaxTurns, &row.MaxConcurrentTools, &row.ForceJSON,
 			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID,
-			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides, &row.ModelParams, &row.HandoffTo, &row.Handoffs)
+			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides, &row.ModelParams, &row.HandoffTo, &row.Handoffs, &row.PreInferenceProcessors)
 	if err != nil {
 		return nil
 	}
 
 	def := &config.Definition{
-		AgentID:            row.AgentID,
-		Kind:               config.Kind(row.Kind),
-		Name:               row.Name,
-		Description:        row.Description,
-		Model:              row.Model,
-		SystemPrompt:       row.SystemPrompt,
-		MaxTurns:           row.MaxTurns,
-		MaxConcurrentTools: row.MaxConcurrentTools,
-		ForceJSON:          row.ForceJSON,
-		Scope:              row.Scope,
-		Team:               row.Team,
-		CreatedBy:          row.CreatedBy,
-		ProviderID:         row.ProviderID,
-		MemoryEnabled:        row.MemoryEnabled,
-		MemorySearchAgentID:  row.MemorySearchAgentID,
-		MemoryIngestAgentID:  row.MemoryIngestAgentID,
-		ToolOverrides:        row.ToolOverrides,
-		ModelParams:          row.ModelParams,
-		HandoffTo:            row.HandoffTo,
+		AgentID:             row.AgentID,
+		Kind:                config.Kind(row.Kind),
+		Name:                row.Name,
+		Description:         row.Description,
+		Model:               row.Model,
+		SystemPrompt:        row.SystemPrompt,
+		MaxTurns:            row.MaxTurns,
+		MaxConcurrentTools:  row.MaxConcurrentTools,
+		ForceJSON:           row.ForceJSON,
+		Scope:               row.Scope,
+		Team:                row.Team,
+		CreatedBy:           row.CreatedBy,
+		ProviderID:          row.ProviderID,
+		MemoryEnabled:       row.MemoryEnabled,
+		MemorySearchAgentID: row.MemorySearchAgentID,
+		MemoryIngestAgentID: row.MemoryIngestAgentID,
+		ToolOverrides:       row.ToolOverrides,
+		ModelParams:         row.ModelParams,
+		HandoffTo:           row.HandoffTo,
 	}
 
 	if len(row.Tools) > 0 {
@@ -291,6 +307,9 @@ func (s *DBStore) GetDefinition(name string) *config.Definition {
 
 	if len(row.Handoffs) > 0 {
 		json.Unmarshal(row.Handoffs, &def.Handoffs)
+	}
+	if len(row.PreInferenceProcessors) > 0 {
+		json.Unmarshal(row.PreInferenceProcessors, &def.PreInferenceProcessors)
 	}
 
 	if len(row.StructuredOutput) > 0 {
@@ -307,62 +326,63 @@ func (s *DBStore) GetDefinitionByID(agentID string) *config.Definition {
 	ctx := context.Background()
 
 	var row struct {
-		AgentID            string
-		Name               string
-		Kind               string
-		Description        string
-		Model              string
-		SystemPrompt       string
-		Tools              []byte
-		MaxTurns           int
-		MaxConcurrentTools int
-		ForceJSON          bool
-		StructuredOutput   []byte
-		Scope              string
-		Team               string
-		CreatedBy          string
-		ProviderID         string
-		MemoryEnabled        bool
-		MemorySearchAgentID  string
-		MemoryIngestAgentID  string
-		ToolOverrides        []byte
-		ModelParams          []byte
-		HandoffTo            string
-		Handoffs             []byte
+		AgentID                string
+		Name                   string
+		Kind                   string
+		Description            string
+		Model                  string
+		SystemPrompt           string
+		Tools                  []byte
+		MaxTurns               int
+		MaxConcurrentTools     int
+		ForceJSON              bool
+		StructuredOutput       []byte
+		Scope                  string
+		Team                   string
+		CreatedBy              string
+		ProviderID             string
+		MemoryEnabled          bool
+		MemorySearchAgentID    string
+		MemoryIngestAgentID    string
+		ToolOverrides          []byte
+		ModelParams            []byte
+		HandoffTo              string
+		Handoffs               []byte
+		PreInferenceProcessors []byte
 	}
 	err := s.pool.QueryRow(ctx, `
 		SELECT agent_id, name, kind, description, model, system_prompt, tools,
 			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id,
-			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params, handoff_to, handoffs
+			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params, handoff_to, handoffs, pre_inference_processors
 		FROM agent_definitions WHERE agent_id = $1`, agentID).
 		Scan(&row.AgentID, &row.Name, &row.Kind, &row.Description, &row.Model,
 			&row.SystemPrompt, &row.Tools, &row.MaxTurns, &row.MaxConcurrentTools, &row.ForceJSON,
 			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID,
-			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides, &row.ModelParams, &row.HandoffTo, &row.Handoffs)
+			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides, &row.ModelParams, &row.HandoffTo, &row.Handoffs, &row.PreInferenceProcessors)
 	if err != nil {
 		return nil
 	}
 
 	def := &config.Definition{
-		AgentID:            row.AgentID,
-		Kind:               config.Kind(row.Kind),
-		Name:               row.Name,
-		Description:        row.Description,
-		Model:              row.Model,
-		SystemPrompt:       row.SystemPrompt,
-		MaxTurns:           row.MaxTurns,
-		MaxConcurrentTools: row.MaxConcurrentTools,
-		ForceJSON:          row.ForceJSON,
-		Scope:              row.Scope,
-		Team:               row.Team,
-		CreatedBy:          row.CreatedBy,
-		ProviderID:         row.ProviderID,
-		MemoryEnabled:        row.MemoryEnabled,
-		MemorySearchAgentID:  row.MemorySearchAgentID,
-		MemoryIngestAgentID:  row.MemoryIngestAgentID,
-		ToolOverrides:        row.ToolOverrides,
-		ModelParams:          row.ModelParams,
-		HandoffTo:            row.HandoffTo,
+		AgentID:             row.AgentID,
+		Kind:                config.Kind(row.Kind),
+		Name:                row.Name,
+		Description:         row.Description,
+		Model:               row.Model,
+		SystemPrompt:        row.SystemPrompt,
+		MaxTurns:            row.MaxTurns,
+		MaxConcurrentTools:  row.MaxConcurrentTools,
+		ForceJSON:           row.ForceJSON,
+		Scope:               row.Scope,
+		Team:                row.Team,
+		CreatedBy:           row.CreatedBy,
+		ProviderID:          row.ProviderID,
+		MemoryEnabled:       row.MemoryEnabled,
+		MemorySearchAgentID: row.MemorySearchAgentID,
+		MemoryIngestAgentID: row.MemoryIngestAgentID,
+		ToolOverrides:       row.ToolOverrides,
+		ModelParams:         row.ModelParams,
+		HandoffTo:           row.HandoffTo,
 	}
 
 	if len(row.Tools) > 0 {
@@ -371,6 +391,9 @@ func (s *DBStore) GetDefinitionByID(agentID string) *config.Definition {
 
 	if len(row.Handoffs) > 0 {
 		json.Unmarshal(row.Handoffs, &def.Handoffs)
+	}
+	if len(row.PreInferenceProcessors) > 0 {
+		json.Unmarshal(row.PreInferenceProcessors, &def.PreInferenceProcessors)
 	}
 
 	if len(row.StructuredOutput) > 0 {
@@ -389,7 +412,7 @@ func (s *DBStore) ListDefinitions() []*config.Definition {
 	ctx := context.Background()
 	rows, err := s.pool.Query(ctx, `SELECT agent_id, name, kind, description, model, system_prompt, tools,
 			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id,
-			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params, handoff_to, handoffs
+			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params, handoff_to, handoffs, pre_inference_processors
 			FROM agent_definitions ORDER BY name`)
 	if err != nil {
 		slog.Error("failed to list agent definitions", "error", err)
@@ -399,57 +422,58 @@ func (s *DBStore) ListDefinitions() []*config.Definition {
 
 	for rows.Next() {
 		var row struct {
-			AgentID            string
-			Name               string
-			Kind               string
-			Description        string
-			Model              string
-			SystemPrompt       string
-			Tools              []byte
-			MaxTurns           int
-			MaxConcurrentTools int
-			ForceJSON          bool
-			StructuredOutput   []byte
-			Scope              string
-			Team               string
-			CreatedBy          string
-			ProviderID         string
-			MemoryEnabled      bool
-			MemorySearchAgentID string
-			MemoryIngestAgentID string
-			ToolOverrides       []byte
-			ModelParams          []byte
-		HandoffTo            string
-		Handoffs             []byte
+			AgentID                string
+			Name                   string
+			Kind                   string
+			Description            string
+			Model                  string
+			SystemPrompt           string
+			Tools                  []byte
+			MaxTurns               int
+			MaxConcurrentTools     int
+			ForceJSON              bool
+			StructuredOutput       []byte
+			Scope                  string
+			Team                   string
+			CreatedBy              string
+			ProviderID             string
+			MemoryEnabled          bool
+			MemorySearchAgentID    string
+			MemoryIngestAgentID    string
+			ToolOverrides          []byte
+			ModelParams            []byte
+			HandoffTo              string
+			Handoffs               []byte
+			PreInferenceProcessors []byte
 		}
 		if err := rows.Scan(&row.AgentID, &row.Name, &row.Kind, &row.Description, &row.Model,
 			&row.SystemPrompt, &row.Tools, &row.MaxTurns, &row.MaxConcurrentTools, &row.ForceJSON,
 			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID,
-			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides, &row.ModelParams, &row.HandoffTo, &row.Handoffs); err != nil {
+			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides, &row.ModelParams, &row.HandoffTo, &row.Handoffs, &row.PreInferenceProcessors); err != nil {
 			slog.Error("failed to scan agent definition row", "error", err)
 			continue
 		}
 
 		def := &config.Definition{
-			AgentID:            row.AgentID,
-			Kind:               config.Kind(row.Kind),
-			Name:               row.Name,
-			Description:        row.Description,
-			Model:              row.Model,
-			SystemPrompt:       row.SystemPrompt,
-			MaxTurns:           row.MaxTurns,
-			MaxConcurrentTools: row.MaxConcurrentTools,
-			ForceJSON:          row.ForceJSON,
-			Scope:              row.Scope,
-			Team:               row.Team,
-			CreatedBy:          row.CreatedBy,
-			ProviderID:         row.ProviderID,
-			MemoryEnabled:        row.MemoryEnabled,
-			MemorySearchAgentID:  row.MemorySearchAgentID,
-			MemoryIngestAgentID:  row.MemoryIngestAgentID,
-			ToolOverrides:        row.ToolOverrides,
-			ModelParams:          row.ModelParams,
-		HandoffTo:            row.HandoffTo,
+			AgentID:             row.AgentID,
+			Kind:                config.Kind(row.Kind),
+			Name:                row.Name,
+			Description:         row.Description,
+			Model:               row.Model,
+			SystemPrompt:        row.SystemPrompt,
+			MaxTurns:            row.MaxTurns,
+			MaxConcurrentTools:  row.MaxConcurrentTools,
+			ForceJSON:           row.ForceJSON,
+			Scope:               row.Scope,
+			Team:                row.Team,
+			CreatedBy:           row.CreatedBy,
+			ProviderID:          row.ProviderID,
+			MemoryEnabled:       row.MemoryEnabled,
+			MemorySearchAgentID: row.MemorySearchAgentID,
+			MemoryIngestAgentID: row.MemoryIngestAgentID,
+			ToolOverrides:       row.ToolOverrides,
+			ModelParams:         row.ModelParams,
+			HandoffTo:           row.HandoffTo,
 		}
 
 		if len(row.Tools) > 0 {
@@ -458,6 +482,9 @@ func (s *DBStore) ListDefinitions() []*config.Definition {
 
 		if len(row.Handoffs) > 0 {
 			json.Unmarshal(row.Handoffs, &def.Handoffs)
+		}
+		if len(row.PreInferenceProcessors) > 0 {
+			json.Unmarshal(row.PreInferenceProcessors, &def.PreInferenceProcessors)
 		}
 
 		if len(row.StructuredOutput) > 0 {

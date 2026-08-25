@@ -93,6 +93,7 @@ func (p *Pool) Migrate(ctx context.Context) error {
 			max_concurrent_tools INT NOT NULL DEFAULT 0,
 			force_json           BOOLEAN NOT NULL DEFAULT false,
 			structured_output    JSONB,
+			pre_inference_processors JSONB NOT NULL DEFAULT '[]',
 			scope                TEXT NOT NULL DEFAULT 'user',
 			team                 TEXT,
 			created_by           TEXT NOT NULL,
@@ -119,6 +120,7 @@ func (p *Pool) Migrate(ctx context.Context) error {
 		`ALTER TABLE agent_definitions ADD COLUMN IF NOT EXISTS model_params JSONB DEFAULT '{}'`,
 		`ALTER TABLE agent_definitions ADD COLUMN IF NOT EXISTS handoff_to TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE agent_definitions ADD COLUMN IF NOT EXISTS handoffs JSONB NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE agent_definitions ADD COLUMN IF NOT EXISTS pre_inference_processors JSONB NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS tool_overrides JSONB NOT NULL DEFAULT '{}'`,
 		`ALTER TABLE inference_providers ADD COLUMN IF NOT EXISTS reasoning JSONB DEFAULT '{}'`,
 

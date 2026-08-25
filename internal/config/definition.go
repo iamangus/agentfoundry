@@ -10,28 +10,73 @@ import (
 // Definition is the structure parsed from a YAML file.
 // It represents an agent definition.
 type Definition struct {
-	AgentID            string            `yaml:"agent_id,omitempty" json:"agent_id,omitempty"`
-	ProviderID         string            `yaml:"provider_id,omitempty" json:"provider_id,omitempty"`
-	Kind               Kind              `yaml:"kind" json:"kind"`
-	Name               string            `yaml:"name" json:"name"`
-	Description        string            `yaml:"description" json:"description,omitempty"`
-	Model              string            `yaml:"model,omitempty" json:"model,omitempty"`
-	SystemPrompt       string            `yaml:"system_prompt" json:"system_prompt"`
-	Tools              []string          `yaml:"tools,omitempty" json:"tools,omitempty"`
-	MaxTurns           int               `yaml:"max_turns,omitempty" json:"max_turns,omitempty"`
-	MaxConcurrentTools int               `yaml:"max_concurrent_tools,omitempty" json:"max_concurrent_tools,omitempty"`
-	ForceJSON          bool              `yaml:"force_json,omitempty" json:"force_json,omitempty"`
-	StructuredOutput   *StructuredOutput `yaml:"structured_output,omitempty" json:"structured_output,omitempty"`
-	Scope              string            `yaml:"scope,omitempty" json:"scope,omitempty"`
-	Team               string            `yaml:"team,omitempty" json:"team,omitempty"`
-	CreatedBy          string            `yaml:"created_by,omitempty" json:"created_by,omitempty"`
-	MemoryEnabled       bool            `yaml:"memory_enabled,omitempty" json:"memory_enabled,omitempty"`
-	MemorySearchAgentID string          `yaml:"memory_search_agent_id,omitempty" json:"memory_search_agent_id,omitempty"`
-	MemoryIngestAgentID string          `yaml:"memory_ingest_agent_id,omitempty" json:"memory_ingest_agent_id,omitempty"`
-	ToolOverrides       json.RawMessage `yaml:"tool_overrides,omitempty" json:"tool_overrides,omitempty"`
-	ModelParams         json.RawMessage `yaml:"model_params,omitempty" json:"model_params,omitempty"`
-	HandoffTo           string          `yaml:"handoff_to,omitempty" json:"handoff_to,omitempty"`
-	Handoffs            []string        `yaml:"handoffs,omitempty" json:"handoffs,omitempty"`
+	AgentID                string                  `yaml:"agent_id,omitempty" json:"agent_id,omitempty"`
+	ProviderID             string                  `yaml:"provider_id,omitempty" json:"provider_id,omitempty"`
+	Kind                   Kind                    `yaml:"kind" json:"kind"`
+	Name                   string                  `yaml:"name" json:"name"`
+	Description            string                  `yaml:"description" json:"description,omitempty"`
+	Model                  string                  `yaml:"model,omitempty" json:"model,omitempty"`
+	SystemPrompt           string                  `yaml:"system_prompt" json:"system_prompt"`
+	Tools                  []string                `yaml:"tools,omitempty" json:"tools,omitempty"`
+	MaxTurns               int                     `yaml:"max_turns,omitempty" json:"max_turns,omitempty"`
+	MaxConcurrentTools     int                     `yaml:"max_concurrent_tools,omitempty" json:"max_concurrent_tools,omitempty"`
+	ForceJSON              bool                    `yaml:"force_json,omitempty" json:"force_json,omitempty"`
+	StructuredOutput       *StructuredOutput       `yaml:"structured_output,omitempty" json:"structured_output,omitempty"`
+	Scope                  string                  `yaml:"scope,omitempty" json:"scope,omitempty"`
+	Team                   string                  `yaml:"team,omitempty" json:"team,omitempty"`
+	CreatedBy              string                  `yaml:"created_by,omitempty" json:"created_by,omitempty"`
+	MemoryEnabled          bool                    `yaml:"memory_enabled,omitempty" json:"memory_enabled,omitempty"`
+	MemorySearchAgentID    string                  `yaml:"memory_search_agent_id,omitempty" json:"memory_search_agent_id,omitempty"`
+	MemoryIngestAgentID    string                  `yaml:"memory_ingest_agent_id,omitempty" json:"memory_ingest_agent_id,omitempty"`
+	ToolOverrides          json.RawMessage         `yaml:"tool_overrides,omitempty" json:"tool_overrides,omitempty"`
+	ModelParams            json.RawMessage         `yaml:"model_params,omitempty" json:"model_params,omitempty"`
+	PreInferenceProcessors []PreInferenceProcessor `yaml:"pre_inference_processors,omitempty" json:"pre_inference_processors,omitempty"`
+	HandoffTo              string                  `yaml:"handoff_to,omitempty" json:"handoff_to,omitempty"`
+	Handoffs               []string                `yaml:"handoffs,omitempty" json:"handoffs,omitempty"`
+}
+
+// PreInferenceProcessor declares work that contributes context before an
+// agent's initial system message is constructed.
+type PreInferenceProcessor struct {
+	ID        string          `yaml:"id,omitempty" json:"id,omitempty"`
+	Processor string          `yaml:"processor" json:"processor"`
+	Phase     string          `yaml:"phase" json:"phase"`
+	Config    json.RawMessage `yaml:"config" json:"config"`
+	OnError   string          `yaml:"on_error,omitempty" json:"on_error,omitempty"`
+	Timeout   int             `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+}
+
+// UnmarshalYAML converts a nested processor config to the JSON payload used by
+// the worker and orchestrator APIs.
+func (p *PreInferenceProcessor) UnmarshalYAML(value *yaml.Node) error {
+	type plain struct {
+		ID        string `yaml:"id"`
+		Processor string `yaml:"processor"`
+		Phase     string `yaml:"phase"`
+		OnError   string `yaml:"on_error"`
+		Timeout   int    `yaml:"timeout"`
+	}
+	var decoded plain
+	if err := value.Decode(&decoded); err != nil {
+		return err
+	}
+	p.ID = decoded.ID
+	p.Processor = decoded.Processor
+	p.Phase = decoded.Phase
+	p.OnError = decoded.OnError
+	p.Timeout = decoded.Timeout
+	for i := 0; i+1 < len(value.Content); i += 2 {
+		if value.Content[i].Value != "config" {
+			continue
+		}
+		configJSON, err := yamlNodeToJSON(value.Content[i+1])
+		if err != nil {
+			return fmt.Errorf("pre_inference_processors.config: %w", err)
+		}
+		p.Config = json.RawMessage(configJSON)
+		break
+	}
+	return nil
 }
 
 // StructuredOutput configures JSON Schema constrained responses.
@@ -157,6 +202,20 @@ func (d *Definition) Validate() error {
 	for _, h := range d.Handoffs {
 		if h == d.Name {
 			return ErrSelfHandoff
+		}
+	}
+	for _, p := range d.PreInferenceProcessors {
+		if p.Processor == "" {
+			return fmt.Errorf("pre_inference processor is required")
+		}
+		if p.Phase != "" && p.Phase != "run_start" {
+			return fmt.Errorf("pre_inference processor %q has unsupported phase %q", p.ID, p.Phase)
+		}
+		if p.OnError != "" && p.OnError != "fail" && p.OnError != "warn" && p.OnError != "skip" {
+			return fmt.Errorf("pre_inference processor %q has invalid on_error %q", p.ID, p.OnError)
+		}
+		if p.Timeout < 0 {
+			return fmt.Errorf("pre_inference processor %q has negative timeout", p.ID)
 		}
 	}
 	return nil
