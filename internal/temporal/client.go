@@ -57,8 +57,9 @@ type RunAgentResult struct {
 }
 
 type PersistentInput struct {
-	Message string `json:"message"`
-	InputID string `json:"input_id"`
+	Message  string            `json:"message"`
+	InputID  string            `json:"input_id"`
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 type Client struct {
