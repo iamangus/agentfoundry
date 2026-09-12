@@ -24,8 +24,10 @@ import (
 )
 
 const (
-	TaskQueue    = "agentfoundry-worker"
-	WorkflowType = "RunAgentWorkflow"
+	TaskQueue              = "agentfoundry-worker"
+	WorkflowType           = "RunAgentWorkflow"
+	PersistentWorkflowType = "PersistentRunWorkflow"
+	PersistentInputSignal  = "persistent-input"
 )
 
 type LLMConfigInput struct {
@@ -33,14 +35,14 @@ type LLMConfigInput struct {
 }
 
 type RunAgentParams struct {
-	AgentID        string                   `json:"agent_id"`
-	AgentName      string                   `json:"agent_name"`
-	Message        string                   `json:"message"`
-	History        []llm.Message            `json:"history,omitempty"`
-	MCPServers     []mcpclient.ServerConfig `json:"mcp_servers,omitempty"`
-	ResponseSchema *config.StructuredOutput `json:"response_schema,omitempty"`
-	StreamID       string                   `json:"stream_id,omitempty"`
-	SessionID      string                   `json:"session_id,omitempty"`
+	AgentID             string                   `json:"agent_id"`
+	AgentName           string                   `json:"agent_name"`
+	Message             string                   `json:"message"`
+	History             []llm.Message            `json:"history,omitempty"`
+	MCPServers          []mcpclient.ServerConfig `json:"mcp_servers,omitempty"`
+	ResponseSchema      *config.StructuredOutput `json:"response_schema,omitempty"`
+	StreamID            string                   `json:"stream_id,omitempty"`
+	SessionID           string                   `json:"session_id,omitempty"`
 	LLMConfig           *LLMConfigInput          `json:"llm_config,omitempty"`
 	MemoryEnabled       bool                     `json:"memory_enabled,omitempty"`
 	MemorySearchAgentID string                   `json:"memory_search_agent_id,omitempty"`
@@ -52,6 +54,11 @@ type RunAgentParams struct {
 type RunAgentResult struct {
 	Response string        `json:"response"`
 	History  []llm.Message `json:"history,omitempty"`
+}
+
+type PersistentInput struct {
+	Message string `json:"message"`
+	InputID string `json:"input_id"`
 }
 
 type Client struct {
@@ -158,6 +165,27 @@ func (c *Client) StartWorkflow(ctx context.Context, params RunAgentParams) (work
 	return workflowID, await, nil
 }
 
+func (c *Client) StartPersistentWorkflow(ctx context.Context, runID string, params RunAgentParams) (workflowID string, await func(context.Context) error, err error) {
+	workflowID = "persistent-" + runID
+	wfRun, err := c.c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+		ID: workflowID, TaskQueue: TaskQueue, SearchAttributes: c.searchAttrs(&params),
+	}, PersistentWorkflowType, params)
+	if err != nil {
+		return "", nil, fmt.Errorf("start persistent workflow: %w", err)
+	}
+	await = func(ctx context.Context) error {
+		return wfRun.Get(ctx, nil)
+	}
+	return workflowID, await, nil
+}
+
+func (c *Client) SignalPersistentInput(ctx context.Context, workflowID string, input PersistentInput) error {
+	if err := c.c.SignalWorkflow(ctx, workflowID, "", PersistentInputSignal, input); err != nil {
+		return fmt.Errorf("signal persistent workflow: %w", err)
+	}
+	return nil
+}
+
 func (c *Client) CancelWorkflow(ctx context.Context, workflowID string) error {
 	err := c.c.CancelWorkflow(ctx, workflowID, "")
 	if err != nil {
@@ -208,13 +236,13 @@ type ExecutionDetail struct {
 }
 
 type spanDatum struct {
-	id              int64
-	eventType       string
-	ts              time.Time
-	name            string
+	id               int64
+	eventType        string
+	ts               time.Time
+	name             string
 	scheduledEventID int64
 	initiatedEventID int64
-	timerID         string
+	timerID          string
 }
 
 func (c *Client) EnsureSearchAttributes(ctx context.Context) error {

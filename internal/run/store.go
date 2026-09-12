@@ -9,23 +9,36 @@ import (
 type Status string
 
 const (
-	StatusRunning  Status = "running"
+	StatusRunning   Status = "running"
+	StatusWaiting   Status = "waiting"
 	StatusCompleted Status = "completed"
-	StatusFailed   Status = "failed"
-	StatusCanceled Status = "canceled"
+	StatusFailed    Status = "failed"
+	StatusCanceled  Status = "canceled"
 )
 
 type Run struct {
-	ID         string    `json:"id"`
-	AgentName  string    `json:"agent"`
-	Status     Status    `json:"status"`
-	Response   string    `json:"response,omitempty"`
-	Error      string    `json:"error,omitempty"`
-	TaskID     string    `json:"task_id,omitempty"`
-	WorkflowID string    `json:"-"`
-	CreatedAt  time.Time `json:"created_at"`
-	Owner      string    `json:"-"`
-	SessionID  string    `json:"-"`
+	ID             string    `json:"id"`
+	AgentName      string    `json:"agent"`
+	Status         Status    `json:"status"`
+	Response       string    `json:"response,omitempty"`
+	Error          string    `json:"error,omitempty"`
+	TaskID         string    `json:"task_id,omitempty"`
+	WorkflowID     string    `json:"-"`
+	CreatedAt      time.Time `json:"created_at"`
+	Owner          string    `json:"-"`
+	SessionID      string    `json:"-"`
+	Persistent     bool      `json:"persistent,omitempty"`
+	EphemeralNames []string  `json:"-"`
+}
+
+// CreatePersistent creates a long-lived run which accepts input signals.
+func (s *Store) CreatePersistent(agentName, owner string) *Run {
+	r := s.Create(agentName, owner, "", "")
+	s.mu.Lock()
+	r.Persistent = true
+	r.Status = StatusWaiting
+	s.mu.Unlock()
+	return r
 }
 
 type Store struct {
@@ -95,6 +108,17 @@ func (s *Store) SetWorkflowID(id, workflowID string) error {
 		return fmt.Errorf("run %s not found", id)
 	}
 	r.WorkflowID = workflowID
+	return nil
+}
+
+func (s *Store) SetEphemeralNames(id string, names []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.runs[id]
+	if !ok {
+		return fmt.Errorf("run %s not found", id)
+	}
+	r.EphemeralNames = append([]string(nil), names...)
 	return nil
 }
 

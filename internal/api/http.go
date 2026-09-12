@@ -20,8 +20,8 @@ import (
 	"github.com/angoo/agentfoundry/internal/registry"
 	"github.com/angoo/agentfoundry/internal/run"
 	"github.com/angoo/agentfoundry/internal/session"
-	"github.com/angoo/agentfoundry/internal/stream"
 	"github.com/angoo/agentfoundry/internal/store"
+	"github.com/angoo/agentfoundry/internal/stream"
 	"github.com/angoo/agentfoundry/internal/temporal"
 )
 
@@ -84,8 +84,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/agents/{name}", h.updateAgent)
 	mux.HandleFunc("DELETE /api/v1/agents/{name}", h.deleteAgent)
 	mux.HandleFunc("POST /api/v1/agents/{name}/run", h.runAgent)
+	mux.HandleFunc("POST /api/v1/agents/{agentID}/runs", h.startPersistentRun)
 	mux.HandleFunc("GET /api/v1/runs", h.listRunsByTaskID)
 	mux.HandleFunc("GET /api/v1/runs/{id}", h.getRunStatus)
+	mux.HandleFunc("POST /api/v1/runs/{id}/inputs", h.submitPersistentInput)
 	mux.HandleFunc("POST /api/v1/runs/{id}/cancel", h.cancelRun)
 	mux.HandleFunc("GET /api/v1/runs/{id}/events", h.runEvents)
 	mux.HandleFunc("GET /api/v1/tools", h.listTools)
@@ -551,6 +553,127 @@ type runAgentResponse struct {
 	RunID string `json:"run_id"`
 }
 
+// startPersistentRun starts an opt-in signal-driven run. Unlike /run, it has
+// no initial message; callers submit ordered messages to its inputs endpoint.
+func (h *Handler) startPersistentRun(w http.ResponseWriter, r *http.Request) {
+	ac := auth.FromContext(r)
+	if ac == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	var req struct {
+		MCPServers     []mcpclient.ServerConfig `json:"mcp_servers,omitempty"`
+		ResponseSchema *config.StructuredOutput `json:"response_schema,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	def := h.store.GetDefinitionByID(r.PathValue("agentID"))
+	if def == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+		return
+	}
+
+	var ephemeralNames []string
+	for _, srv := range req.MCPServers {
+		econn, err := mcpclient.ConnectEphemeral(r.Context(), srv)
+		if err != nil {
+			for _, name := range ephemeralNames {
+				h.pool.UnregisterEphemeral(name)
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "connect MCP server: " + err.Error()})
+			return
+		}
+		h.pool.RegisterEphemeral(econn)
+		ephemeralNames = append(ephemeralNames, srv.Name)
+	}
+
+	newRun := h.runs.CreatePersistent(def.Name, ac.Subject)
+	h.runs.SetEphemeralNames(newRun.ID, ephemeralNames)
+	h.streams.Create(newRun.ID)
+	workflowID, await, err := h.temporal.StartPersistentWorkflow(r.Context(), newRun.ID, temporal.RunAgentParams{
+		AgentID: def.AgentID, AgentName: def.Name, MCPServers: req.MCPServers,
+		ResponseSchema: req.ResponseSchema, StreamID: newRun.ID,
+		LLMConfig: h.buildLLMConfig(r.Context(), def), MemoryEnabled: def.MemoryEnabled,
+		MemorySearchAgentID: def.MemorySearchAgentID, MemoryIngestAgentID: def.MemoryIngestAgentID,
+		UserSubject: ac.Subject,
+	})
+	if err != nil {
+		for _, name := range ephemeralNames {
+			h.pool.UnregisterEphemeral(name)
+		}
+		h.streams.Delete(newRun.ID)
+		h.runs.Delete(newRun.ID)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to start workflow: " + err.Error()})
+		return
+	}
+	h.runs.SetWorkflowID(newRun.ID, workflowID)
+	go h.awaitPersistentRun(newRun.ID, await)
+	writeJSON(w, http.StatusAccepted, runAgentResponse{RunID: newRun.ID})
+}
+
+func (h *Handler) awaitPersistentRun(runID string, await func(context.Context) error) {
+	err := await(context.Background())
+	ru, ok := h.runs.Get(runID)
+	if !ok {
+		return
+	}
+	for _, name := range ru.EphemeralNames {
+		h.pool.UnregisterEphemeral(name)
+	}
+	if err != nil && ru.Status != run.StatusCanceled {
+		h.runs.UpdateStatus(runID, run.StatusFailed, "", err.Error())
+		h.streams.PublishError(runID, "Error: "+err.Error())
+		return
+	}
+	if ru.Status == run.StatusCanceled {
+		return
+	}
+	h.runs.UpdateStatus(runID, run.StatusCompleted, ru.Response, "")
+}
+
+func (h *Handler) submitPersistentInput(w http.ResponseWriter, r *http.Request) {
+	ac := auth.FromContext(r)
+	if ac == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	ru, ok := h.runs.Get(r.PathValue("id"))
+	if !ok || ru.Owner != ac.Subject {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "run not found"})
+		return
+	}
+	if !ru.Persistent {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "run does not accept inputs"})
+		return
+	}
+	if ru.Status == run.StatusCanceled || ru.Status == run.StatusCompleted || ru.Status == run.StatusFailed {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "run is not active", "status": string(ru.Status)})
+		return
+	}
+	var req temporal.PersistentInput
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	if req.Message == "" || req.InputID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "message and input_id are required"})
+		return
+	}
+	if ru.Status == run.StatusWaiting {
+		// A prior persistent turn closes its SSE stream with `done`; each new
+		// input gets a fresh stream while retaining the same logical run ID.
+		h.streams.Create(ru.ID)
+	}
+	if err := h.temporal.SignalPersistentInput(r.Context(), ru.WorkflowID, req); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	h.runs.UpdateStatus(ru.ID, run.StatusRunning, ru.Response, "")
+	writeJSON(w, http.StatusAccepted, runAgentResponse{RunID: ru.ID})
+}
+
 func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 	agentID := r.PathValue("name")
 
@@ -622,15 +745,15 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	workflowID, await, err := h.temporal.StartWorkflow(r.Context(), temporal.RunAgentParams{
-		AgentID:        def.AgentID,
-		AgentName:      def.Name,
-		Message:        req.Message,
-		History:        history,
-		MCPServers:     req.MCPServers,
-		ResponseSchema: req.ResponseSchema,
-		StreamID:       newRun.ID,
-		SessionID:      sessionID,
-		LLMConfig:      h.buildLLMConfig(r.Context(), def),
+		AgentID:             def.AgentID,
+		AgentName:           def.Name,
+		Message:             req.Message,
+		History:             history,
+		MCPServers:          req.MCPServers,
+		ResponseSchema:      req.ResponseSchema,
+		StreamID:            newRun.ID,
+		SessionID:           sessionID,
+		LLMConfig:           h.buildLLMConfig(r.Context(), def),
 		MemoryEnabled:       def.MemoryEnabled,
 		MemorySearchAgentID: def.MemorySearchAgentID,
 		MemoryIngestAgentID: def.MemoryIngestAgentID,
@@ -704,7 +827,8 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) getRunStatus(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	ru, ok := h.runs.Get(id)
-	if !ok {
+	ac := auth.FromContext(r)
+	if !ok || ac == nil || ru.Owner != ac.Subject {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "run not found"})
 		return
 	}
@@ -714,28 +838,40 @@ func (h *Handler) getRunStatus(w http.ResponseWriter, r *http.Request) {
 // listRunsByTaskID returns the run associated with a background task id, so
 // eve can rediscover in-flight task runs after its own restart.
 func (h *Handler) listRunsByTaskID(w http.ResponseWriter, r *http.Request) {
+	ac := auth.FromContext(r)
+	if ac == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
 	taskID := r.URL.Query().Get("task_id")
 	if taskID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "task_id query parameter is required"})
 		return
 	}
 	runs := h.runs.ListByTaskID(taskID)
+	for _, ru := range runs {
+		if ru.Owner == ac.Subject {
+			writeJSON(w, http.StatusOK, ru)
+			return
+		}
+	}
 	if len(runs) == 0 {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no run found for task"})
 		return
 	}
-	writeJSON(w, http.StatusOK, runs[0])
+	writeJSON(w, http.StatusNotFound, map[string]string{"error": "no run found for task"})
 }
 
 func (h *Handler) cancelRun(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	ru, ok := h.runs.Get(id)
-	if !ok {
+	ac := auth.FromContext(r)
+	if !ok || ac == nil || ru.Owner != ac.Subject {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "run not found"})
 		return
 	}
 
-	if ru.Status != run.StatusRunning {
+	if ru.Status != run.StatusRunning && ru.Status != run.StatusWaiting {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "run is not running", "status": string(ru.Status)})
 		return
 	}
@@ -891,8 +1027,6 @@ func (h *Handler) getChatSession(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, sess)
 }
-
-
 
 func (h *Handler) runEvents(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("id")

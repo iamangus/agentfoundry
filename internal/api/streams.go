@@ -3,6 +3,8 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/angoo/agentfoundry/internal/run"
 )
 
 type streamTokenRequest struct {
@@ -44,6 +46,15 @@ func (h *Handler) publishStreamEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.streams.PublishEvent(streamID, req.Type, req.Data)
+	if req.Type == "turn_done" {
+		// Complete this SSE turn while leaving the logical persistent run alive.
+		h.streams.PublishDone(streamID, req.Data)
+		_ = h.runs.UpdateStatus(streamID, run.StatusWaiting, req.Data, "")
+	} else if req.Type == "turn_error" {
+		h.streams.PublishError(streamID, "Error: "+req.Data)
+		_ = h.runs.UpdateStatus(streamID, run.StatusWaiting, "", req.Data)
+	} else {
+		h.streams.PublishEvent(streamID, req.Type, req.Data)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
