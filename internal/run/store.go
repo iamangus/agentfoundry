@@ -23,7 +23,7 @@ type Run struct {
 	Response       string    `json:"response,omitempty"`
 	Error          string    `json:"error,omitempty"`
 	TaskID         string    `json:"task_id,omitempty"`
-	WorkflowID     string    `json:"-"`
+	WorkflowID     string    `json:"workflow_id,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 	Owner          string    `json:"-"`
 	SessionID      string    `json:"-"`

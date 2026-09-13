@@ -87,6 +87,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/agents/{agentID}/runs", h.startPersistentRun)
 	mux.HandleFunc("GET /api/v1/runs", h.listRunsByTaskID)
 	mux.HandleFunc("GET /api/v1/runs/{id}", h.getRunStatus)
+	mux.HandleFunc("GET /api/v1/runs/{id}/trace", h.getRunTrace)
 	mux.HandleFunc("POST /api/v1/runs/{id}/inputs", h.submitPersistentInput)
 	mux.HandleFunc("POST /api/v1/runs/{id}/cancel", h.cancelRun)
 	mux.HandleFunc("GET /api/v1/runs/{id}/events", h.runEvents)
@@ -126,6 +127,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/v1/executions", h.listExecutions)
 	mux.HandleFunc("GET /api/v1/executions/{workflowId}", h.getExecution)
+	mux.HandleFunc("GET /api/v1/executions/{workflowId}/trace", h.getExecutionTrace)
 
 	slog.Info("API routes registered", "prefix", "/api/v1")
 }
@@ -550,7 +552,8 @@ type runAgentRequest struct {
 }
 
 type runAgentResponse struct {
-	RunID string `json:"run_id"`
+	RunID      string `json:"run_id"`
+	WorkflowID string `json:"workflow_id"`
 }
 
 // startPersistentRun starts an opt-in signal-driven run. Unlike /run, it has
@@ -610,7 +613,7 @@ func (h *Handler) startPersistentRun(w http.ResponseWriter, r *http.Request) {
 	}
 	h.runs.SetWorkflowID(newRun.ID, workflowID)
 	go h.awaitPersistentRun(newRun.ID, await)
-	writeJSON(w, http.StatusAccepted, runAgentResponse{RunID: newRun.ID})
+	writeJSON(w, http.StatusAccepted, runAgentResponse{RunID: newRun.ID, WorkflowID: workflowID})
 }
 
 func (h *Handler) awaitPersistentRun(runID string, await func(context.Context) error) {
@@ -671,7 +674,7 @@ func (h *Handler) submitPersistentInput(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	h.runs.UpdateStatus(ru.ID, run.StatusRunning, ru.Response, "")
-	writeJSON(w, http.StatusAccepted, runAgentResponse{RunID: ru.ID})
+	writeJSON(w, http.StatusAccepted, runAgentResponse{RunID: ru.ID, WorkflowID: ru.WorkflowID})
 }
 
 func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
@@ -821,7 +824,7 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 		cleanup()
 	}()
 
-	writeJSON(w, http.StatusAccepted, runAgentResponse{RunID: newRun.ID})
+	writeJSON(w, http.StatusAccepted, runAgentResponse{RunID: newRun.ID, WorkflowID: workflowID})
 }
 
 func (h *Handler) getRunStatus(w http.ResponseWriter, r *http.Request) {
@@ -833,6 +836,28 @@ func (h *Handler) getRunStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, ru)
+}
+
+// getRunTrace exposes only the Temporal execution associated with a run the
+// caller owns; workflow IDs alone are not sufficient authorization.
+func (h *Handler) getRunTrace(w http.ResponseWriter, r *http.Request) {
+	ru, ok := h.runs.Get(r.PathValue("id"))
+	ac := auth.FromContext(r)
+	if !ok || ac == nil || ru.Owner != ac.Subject {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "run not found"})
+		return
+	}
+	if ru.WorkflowID == "" {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "run has no workflow"})
+		return
+	}
+	trace, err := h.temporal.GetExecutionTrace(r.Context(), ru.WorkflowID, "")
+	if err != nil {
+		slog.Error("failed to get run trace", "run_id", ru.ID, "workflow_id", ru.WorkflowID, "error", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "failed to get run trace: " + err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, trace)
 }
 
 // listRunsByTaskID returns the run associated with a background task id, so
@@ -1322,6 +1347,44 @@ func (h *Handler) getExecution(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, detail)
+}
+
+// getExecutionTrace exposes a normalized, durable execution trace. It uses the
+// same visibility rules as raw history but remains available after ephemeral
+// run status records have been cleaned up.
+func (h *Handler) getExecutionTrace(w http.ResponseWriter, r *http.Request) {
+	ac := auth.FromContext(r)
+	workflowID := r.PathValue("workflowId")
+	trace, err := h.temporal.GetExecutionTrace(r.Context(), workflowID, "")
+	if err != nil {
+		slog.Error("failed to get execution trace", "workflow_id", workflowID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get execution trace: " + err.Error()})
+		return
+	}
+	if ac != nil && ac.IsGlobalAdmin {
+		writeJSON(w, http.StatusOK, trace)
+		return
+	}
+	def := h.store.GetDefinition(trace.AgentName)
+	if def == nil || !def.VisibleTo(authSubject(ac), authTeams(ac), ac != nil && ac.IsGlobalAdmin) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, trace)
+}
+
+func authSubject(ac *auth.AuthContext) string {
+	if ac == nil {
+		return ""
+	}
+	return ac.Subject
+}
+
+func authTeams(ac *auth.AuthContext) []string {
+	if ac == nil {
+		return nil
+	}
+	return ac.Teams
 }
 
 func (h *Handler) agentVisible(ac *auth.AuthContext, agentName string) bool {

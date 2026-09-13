@@ -236,6 +236,30 @@ type ExecutionDetail struct {
 	Spans      []TimelineSpan `json:"spans"`
 }
 
+// ExecutionTrace is a compact, provider-neutral view of the activities that
+// make up an agent execution. Input and output preserve decoded Temporal data
+// for consumers that need more detail than the normalized fields provide.
+type ExecutionTrace struct {
+	WorkflowID string       `json:"workflow_id"`
+	RunID      string       `json:"run_id,omitempty"`
+	AgentName  string       `json:"agent_name,omitempty"`
+	Status     string       `json:"status"`
+	Events     []TraceEvent `json:"events"`
+}
+
+type TraceEvent struct {
+	EventID   int64  `json:"event_id"`
+	EventTime string `json:"event_time"`
+	Kind      string `json:"kind"`
+	Activity  string `json:"activity,omitempty"`
+	Model     string `json:"model,omitempty"`
+	Tool      string `json:"tool,omitempty"`
+	Schema    any    `json:"schema,omitempty"`
+	Input     any    `json:"input,omitempty"`
+	Output    any    `json:"output,omitempty"`
+	Error     any    `json:"error,omitempty"`
+}
+
 type spanDatum struct {
 	id               int64
 	eventType        string
@@ -389,6 +413,132 @@ func (c *Client) GetWorkflowHistory(ctx context.Context, workflowID, runID strin
 	}
 
 	return detail, nil
+}
+
+func (c *Client) GetExecutionTrace(ctx context.Context, workflowID, runID string) (*ExecutionTrace, error) {
+	detail, err := c.GetWorkflowHistory(ctx, workflowID, runID)
+	if err != nil {
+		return nil, err
+	}
+	return NormalizeExecutionTrace(detail), nil
+}
+
+// NormalizeExecutionTrace folds Temporal activity scheduling and completion
+// records into one event per useful agent operation.
+func NormalizeExecutionTrace(detail *ExecutionDetail) *ExecutionTrace {
+	trace := &ExecutionTrace{
+		WorkflowID: detail.WorkflowID,
+		RunID:      detail.RunID,
+		AgentName:  detail.AgentName,
+		Status:     detail.Status,
+		Events:     make([]TraceEvent, 0),
+	}
+	scheduled := make(map[int64]int)
+
+	for _, event := range detail.History {
+		details, _ := event.Details.(map[string]interface{})
+		switch event.EventType {
+		case "ActivityTaskScheduled":
+			attrs := mapValue(details, "activityTaskScheduledEventAttributes")
+			activity := stringValue(attrs, "activityType", "name")
+			kind := traceActivityKind(activity)
+			if kind == "" {
+				continue
+			}
+			input := unwrapPayload(mapValue(attrs, "input"))
+			traceEvent := TraceEvent{
+				EventID: event.EventID, EventTime: event.EventTime, Kind: kind,
+				Activity: activity, Input: input,
+			}
+			switch kind {
+			case "model":
+				traceEvent.Model = stringValue(mapValue(input, "request"), "model")
+				traceEvent.Schema = mapValue(input, "request")["response_format"]
+			case "tool":
+				server := stringValue(input, "server_name")
+				tool := stringValue(input, "tool_name")
+				traceEvent.Tool = strings.TrimPrefix(server+"."+tool, ".")
+			case "schema":
+				traceEvent.Schema = input
+			}
+			scheduled[event.EventID] = len(trace.Events)
+			trace.Events = append(trace.Events, traceEvent)
+		case "ActivityTaskCompleted", "ActivityTaskFailed", "ActivityTaskTimedOut", "ActivityTaskCanceled":
+			attrs := mapValue(details, strings.ToLower(event.EventType[:1])+event.EventType[1:]+"EventAttributes")
+			index, ok := scheduled[intValue(attrs, "scheduledEventId")]
+			if !ok {
+				continue
+			}
+			if event.EventType == "ActivityTaskCompleted" {
+				trace.Events[index].Output = unwrapPayload(mapValue(attrs, "result"))
+			} else {
+				trace.Events[index].Error = mapValue(attrs, "failure")
+			}
+		case "WorkflowExecutionCompleted", "WorkflowExecutionFailed", "WorkflowExecutionCanceled", "WorkflowExecutionTerminated", "WorkflowExecutionTimedOut":
+			attrs := mapValue(details, strings.ToLower(event.EventType[:1])+event.EventType[1:]+"EventAttributes")
+			terminal := TraceEvent{EventID: event.EventID, EventTime: event.EventTime, Kind: "terminal"}
+			if event.EventType == "WorkflowExecutionCompleted" {
+				terminal.Output = unwrapPayload(mapValue(attrs, "result"))
+			} else {
+				terminal.Error = mapValue(attrs, "failure")
+			}
+			trace.Events = append(trace.Events, terminal)
+		}
+	}
+	return trace
+}
+
+func traceActivityKind(activity string) string {
+	switch {
+	case strings.Contains(activity, "LLMChatActivity"):
+		return "model"
+	case strings.Contains(activity, "CallToolActivity"):
+		return "tool"
+	case strings.Contains(activity, "BuildToolDefsActivity"):
+		return "schema"
+	default:
+		return ""
+	}
+}
+
+func mapValue(value any, keys ...string) map[string]interface{} {
+	m, _ := valueAt(value, keys...).(map[string]interface{})
+	return m
+}
+
+func stringValue(value any, keys ...string) string {
+	s, _ := valueAt(value, keys...).(string)
+	return s
+}
+
+func intValue(value any, key string) int64 {
+	if n, ok := valueAt(value, key).(float64); ok {
+		return int64(n)
+	}
+	return 0
+}
+
+func valueAt(value any, keys ...string) any {
+	for _, key := range keys {
+		m, ok := value.(map[string]interface{})
+		if !ok {
+			return nil
+		}
+		value = m[key]
+	}
+	return value
+}
+
+func unwrapPayload(value any) any {
+	m, ok := value.(map[string]interface{})
+	if !ok {
+		return value
+	}
+	payloads, ok := m["payloads"].([]interface{})
+	if !ok || len(payloads) != 1 {
+		return value
+	}
+	return payloads[0]
 }
 
 func summarizeEvent(event *history.HistoryEvent) string {
