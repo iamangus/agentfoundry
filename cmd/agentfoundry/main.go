@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -158,13 +159,129 @@ func main() {
 	})
 
 	streams := stream.NewManager()
-	sessions := session.New()
-	runs := run.New()
+	sessions, err := session.NewDB(ctx, dbPool.Pool)
+	if err != nil {
+		slog.Error("failed to restore chat sessions", "error", err)
+		os.Exit(1)
+	}
+	runs, err := run.NewDB(ctx, dbPool.Pool)
+	if err != nil {
+		slog.Error("failed to restore agent runs", "error", err)
+		os.Exit(1)
+	}
+	for _, orphan := range runs.Unstarted() {
+		go func(r run.Run) {
+			message := "workflow was not submitted before restart"
+			if err := runs.WaitForStatus(context.Background(), r.ID, run.StatusFailed, "", message); err == nil && r.SessionID != "" {
+				_ = sessions.CompleteRunUntil(context.Background(), r.SessionID, r.ID, "Error: "+message)
+			}
+		}(orphan)
+	}
 
 	providerStore := store.NewProviderStore(dbPool.Pool)
 
 	apiHandler := api.NewHandler(reg, pool, definitionStore, temporalClient, streams, sessions, keyStore, mcpStore, runs, providerStore, authCfg.InternalAPIKey)
 	apiHandler.RegisterRoutes(mux)
+	for _, sess := range sessions.List() {
+		if sess.ActiveRunID == "" {
+			continue
+		}
+		r, ok := runs.Get(sess.ActiveRunID)
+		if !ok {
+			if err := sessions.ClearActiveRunID(sess.ID); err != nil {
+				slog.Error("clear missing session run", "session", sess.ID, "error", err)
+			}
+			continue
+		}
+		switch r.Status {
+		case run.StatusCompleted:
+			go sessions.CompleteRunUntil(context.Background(), sess.ID, r.ID, r.Response)
+		case run.StatusFailed, run.StatusCanceled:
+			go sessions.CompleteRunUntil(context.Background(), sess.ID, r.ID, "Error: "+r.Error)
+		}
+	}
+	for _, active := range runs.InFlight() {
+		if len(active.MCPServers) > 0 {
+			var configs []mcpclient.ServerConfig
+			if err := json.Unmarshal(active.MCPServers, &configs); err != nil {
+				slog.Error("restore run MCP configuration", "run", active.ID, "error", err)
+			} else {
+				var names []string
+				for _, srv := range configs {
+					connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+					conn, err := mcpclient.ConnectEphemeral(connectCtx, srv)
+					cancel()
+					if err != nil {
+						slog.Error("restore run MCP connection", "run", active.ID, "server", srv.Name, "error", err)
+						go retryRestoredRunMCP(runs, pool, active.ID, srv)
+						continue
+					}
+					if err := pool.RegisterEphemeral(conn); err != nil {
+						conn.Close()
+						slog.Error("restore run MCP registration", "run", active.ID, "server", srv.Name, "error", err)
+						go retryRestoredRunMCP(runs, pool, active.ID, srv)
+						continue
+					}
+					names = append(names, srv.Name)
+				}
+				_ = runs.SetEphemeralNames(active.ID, names)
+			}
+		}
+		if active.Persistent {
+			go func(r run.Run) {
+				defer func() {
+					if current, ok := runs.Get(r.ID); ok {
+						for _, name := range current.EphemeralNames {
+							pool.UnregisterEphemeral(name)
+						}
+					}
+				}()
+				_, err := temporalClient.AwaitWorkflow(context.Background(), r.WorkflowID, true)
+				current, ok := runs.Get(r.ID)
+				if !ok || current.Status == run.StatusCanceled {
+					return
+				}
+				if err != nil {
+					if saveErr := runs.WaitForStatus(context.Background(), r.ID, run.StatusFailed, "", err.Error()); saveErr != nil {
+						return
+					}
+					streams.PublishError(r.ID, "Error: "+err.Error())
+				} else {
+					_ = runs.WaitForStatus(context.Background(), r.ID, run.StatusCompleted, current.Response, "")
+				}
+			}(active)
+			continue
+		}
+		go func(r run.Run) {
+			defer func() {
+				current, ok := runs.Get(r.ID)
+				if ok {
+					for _, name := range current.EphemeralNames {
+						pool.UnregisterEphemeral(name)
+					}
+				}
+			}()
+			result, err := temporalClient.AwaitWorkflow(context.Background(), r.WorkflowID, false)
+			if err != nil {
+				slog.Error("restored run failed", "run", r.ID, "error", err)
+				if saveErr := runs.WaitForStatus(context.Background(), r.ID, run.StatusFailed, "", err.Error()); saveErr != nil {
+					return
+				}
+				if r.SessionID != "" {
+					_ = sessions.CompleteRunUntil(context.Background(), r.SessionID, r.ID, "Error: "+err.Error())
+				}
+				streams.PublishError(r.ID, "Error: "+err.Error())
+				return
+			}
+			if err := runs.WaitForStatus(context.Background(), r.ID, run.StatusCompleted, result.Response, ""); err != nil {
+				return
+			}
+			if r.SessionID != "" {
+				_ = sessions.CompleteRunUntil(context.Background(), r.SessionID, r.ID, result.Response)
+			}
+			streams.PublishDone(r.ID, result.Response)
+		}(active)
+	}
 
 	var handler http.Handler = mux
 	if authMW != nil {
@@ -201,4 +318,33 @@ func main() {
 		slog.Error("shutdown error", "error", err)
 	}
 	slog.Info("agentfoundry stopped")
+}
+
+func retryRestoredRunMCP(runs *run.Store, pool *mcpclient.Pool, runID string, srv mcpclient.ServerConfig) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		r, ok := runs.Get(runID)
+		if !ok || (r.Status != run.StatusRunning && r.Status != run.StatusWaiting) {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		conn, err := mcpclient.ConnectEphemeral(ctx, srv)
+		cancel()
+		if err != nil {
+			slog.Warn("retry run MCP connection", "run", runID, "server", srv.Name, "error", err)
+			continue
+		}
+		if err := pool.RegisterEphemeral(conn); err != nil {
+			conn.Close()
+			slog.Warn("retry run MCP registration", "run", runID, "server", srv.Name, "error", err)
+			continue
+		}
+		if !runs.AddEphemeralNameIfActive(runID, srv.Name) {
+			pool.UnregisterEphemeral(srv.Name)
+			return
+		}
+		slog.Info("restored run MCP connection", "run", runID, "server", srv.Name)
+		return
+	}
 }

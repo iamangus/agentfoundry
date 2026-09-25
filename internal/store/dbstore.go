@@ -183,7 +183,12 @@ func (s *DBStore) SaveDefinition(def *config.Definition) error {
 		processorsJSON = []byte("[]")
 	}
 
-	_, err = s.pool.Exec(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin agent definition save: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	_, err = tx.Exec(ctx, `
 		INSERT INTO agent_definitions
 			(agent_id, name, kind, description, model, system_prompt, tools,
 			 max_turns, max_concurrent_tools, force_json, structured_output,
@@ -224,9 +229,12 @@ func (s *DBStore) SaveDefinition(def *config.Definition) error {
 	if err != nil {
 		return fmt.Errorf("marshal yaml for version: %w", err)
 	}
-	_, err = s.pool.Exec(ctx, `INSERT INTO agent_versions (agent_id, definition_yaml) VALUES ($1, $2)`, def.AgentID, string(yamlData))
+	_, err = tx.Exec(ctx, `INSERT INTO agent_versions (agent_id, definition_yaml) VALUES ($1, $2)`, def.AgentID, string(yamlData))
 	if err != nil {
-		slog.Error("failed to record agent version", "agent_id", def.AgentID, "error", err)
+		return fmt.Errorf("record agent version: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit agent definition save: %w", err)
 	}
 
 	return s.reg.RegisterAgent(def)
@@ -527,17 +535,6 @@ func (s *DBStore) GetRawDefinition(name string) ([]byte, error) {
 	}
 
 	return []byte(yamlData), nil
-}
-
-func (s *DBStore) SaveRawDefinition(name string, data []byte) error {
-	var def config.Definition
-	if err := yaml.Unmarshal(data, &def); err != nil {
-		return fmt.Errorf("parse YAML: %w", err)
-	}
-	if err := def.Validate(); err != nil {
-		return err
-	}
-	return s.SaveDefinition(&def)
 }
 
 func (s *DBStore) resolveAgentID(ctx context.Context, name string) (string, error) {

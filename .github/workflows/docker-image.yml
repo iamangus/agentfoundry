@@ -1,5 +1,9 @@
 name: Docker Image CI
 
+permissions:
+  contents: read
+  packages: write
+
 on:
   push:
     branches: [ main ]
@@ -12,15 +16,18 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Login to GitHub Container Registry
-      run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      if: github.event_name != 'pull_request'
+      run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
     - name: Set Date based var for use in tag
       id: vars
       run: echo "tag=$(date +%s)" >> "$GITHUB_OUTPUT"
     - name: Build the tagged Docker image
       run: docker build . --file Dockerfile --tag ghcr.io/${{ github.repository }}:latest
     - name: Push the latest Docker image
+      if: github.event_name != 'pull_request'
       run: docker push ghcr.io/${{ github.repository }}:latest
     - name: retag and push
       run: docker tag ghcr.io/${{ github.repository }}:latest ghcr.io/${{ github.repository }}:${{steps.vars.outputs.tag}}
     - name: Push the tagged Docker image
+      if: github.event_name != 'pull_request'
       run: docker push ghcr.io/${{ github.repository }}:${{steps.vars.outputs.tag}}

@@ -3,8 +3,6 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-
-	"github.com/angoo/agentfoundry/internal/run"
 )
 
 type streamTokenRequest struct {
@@ -29,8 +27,9 @@ func (h *Handler) publishStreamToken(w http.ResponseWriter, r *http.Request) {
 }
 
 type streamEventRequest struct {
-	Type string `json:"type"`
-	Data string `json:"data,omitempty"`
+	Type    string `json:"type"`
+	Data    string `json:"data,omitempty"`
+	InputID string `json:"input_id,omitempty"`
 }
 
 func (h *Handler) publishStreamEvent(w http.ResponseWriter, r *http.Request) {
@@ -46,13 +45,37 @@ func (h *Handler) publishStreamEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Type == "turn_done" {
-		// Complete this SSE turn while leaving the logical persistent run alive.
-		h.streams.PublishDone(streamID, req.Data)
-		_ = h.runs.UpdateStatus(streamID, run.StatusWaiting, req.Data, "")
+	if req.Type == "input_processed" || req.Type == "input_failed" {
+		if req.InputID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "input_id is required"})
+			return
+		}
+		status := "processed"
+		if req.Type == "input_failed" {
+			status = "failed"
+		}
+		if err := h.runs.FinishReceipt(streamID, req.InputID, status); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "failed to record input result"})
+			return
+		}
+	} else if req.Type == "turn_done" {
+		matched, err := h.runs.FinishInput(streamID, req.InputID, req.Data, "")
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "failed to record turn result"})
+			return
+		}
+		if matched {
+			h.streams.PublishDone(streamID, req.Data)
+		}
 	} else if req.Type == "turn_error" {
-		h.streams.PublishError(streamID, "Error: "+req.Data)
-		_ = h.runs.UpdateStatus(streamID, run.StatusWaiting, "", req.Data)
+		matched, err := h.runs.FinishInput(streamID, req.InputID, "", req.Data)
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "failed to record turn error"})
+			return
+		}
+		if matched {
+			h.streams.PublishError(streamID, "Error: "+req.Data)
+		}
 	} else {
 		h.streams.PublishEvent(streamID, req.Type, req.Data)
 	}

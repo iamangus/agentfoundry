@@ -3,6 +3,7 @@ package stream
 import "sync"
 
 const subBufferSize = 64
+const maxReplayEvents = 2048
 
 type Event struct {
 	ID   int64
@@ -24,10 +25,19 @@ func (s *Stream) publish(evt Event) {
 	evt.ID = s.nextID
 	s.nextID++
 	s.events = append(s.events, evt)
+	if len(s.events) > maxReplayEvents {
+		s.events = s.events[len(s.events)-maxReplayEvents:]
+	}
 	for _, ch := range s.subs {
 		select {
 		case ch <- evt:
 		default:
+			if evt.Type == "done" || evt.Type == "error" {
+				for len(ch) == cap(ch) {
+					<-ch
+				}
+				ch <- evt
+			}
 		}
 	}
 	if evt.Type == "done" || evt.Type == "error" {

@@ -18,11 +18,11 @@ Backend service for defining, managing, and orchestrating AI agents. Agent defin
 
 ### Prerequisites
 
-- Go 1.21+
+- Go 1.25.3
 - A running [Temporal](https://temporal.io/) server
 - [agentfoundry-worker](https://github.com/angoo/agentfoundry-worker) running (the worker handles LLM calls)
 - (Optional) Keycloak for OIDC authentication
-- (Required) PostgreSQL (for agent definitions, API keys, MCP servers, and inference providers)
+- (Required) PostgreSQL (for agent definitions, API keys, MCP servers, inference providers, and run records)
 
 ### Build and Run
 
@@ -40,7 +40,7 @@ docker run -p 3000:3000 \
   agentfoundry
 ```
 
-The container stores configuration at `/data`. All persistent data (agent definitions, API keys, MCP servers, inference providers) is stored in PostgreSQL.
+The container stores configuration at `/data`. Agent definitions, API keys, MCP servers, inference providers, chat sessions, input receipts, and API-facing run records are stored in PostgreSQL; Temporal owns workflow execution history. A run's ownership and workflow ID survive a Foundry restart, and completed results remain queryable. SSE token replay is bounded in memory and is not an archival event log.
 
 ## Configuration
 

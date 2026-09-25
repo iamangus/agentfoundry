@@ -122,8 +122,6 @@ func (p *Pool) Migrate(ctx context.Context) error {
 		`ALTER TABLE agent_definitions ADD COLUMN IF NOT EXISTS handoffs JSONB NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE agent_definitions ADD COLUMN IF NOT EXISTS pre_inference_processors JSONB NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS tool_overrides JSONB NOT NULL DEFAULT '{}'`,
-		`ALTER TABLE inference_providers ADD COLUMN IF NOT EXISTS reasoning JSONB DEFAULT '{}'`,
-
 		`CREATE TABLE IF NOT EXISTS inference_providers (
 			id                TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
 			name              TEXT NOT NULL UNIQUE,
@@ -139,13 +137,63 @@ func (p *Pool) Migrate(ctx context.Context) error {
 			created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
+		`ALTER TABLE inference_providers ADD COLUMN IF NOT EXISTS reasoning JSONB DEFAULT '{}'`,
 		`CREATE INDEX IF NOT EXISTS idx_inference_providers_scope ON inference_providers (scope, team)`,
+		`CREATE TABLE IF NOT EXISTS agent_runs (
+			id TEXT PRIMARY KEY,
+			agent_name TEXT NOT NULL,
+			owner_subject TEXT NOT NULL,
+			status TEXT NOT NULL,
+			response TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			task_id TEXT NOT NULL DEFAULT '',
+			workflow_id TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL DEFAULT '',
+			persistent BOOLEAN NOT NULL DEFAULT false,
+			created_at TIMESTAMPTZ NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_runs_task ON agent_runs (task_id, created_at DESC) WHERE task_id <> ''`,
+		`ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS mcp_servers JSONB NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS current_input_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS last_input_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS client_key TEXT NOT NULL DEFAULT ''`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runs_active_client_key ON agent_runs (owner_subject, client_key) WHERE persistent AND client_key <> '' AND status IN ('waiting', 'running')`,
+		`ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS dispatch_key TEXT NOT NULL DEFAULT ''`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runs_dispatch_key ON agent_runs (owner_subject, dispatch_key) WHERE dispatch_key <> ''`,
+		`CREATE TABLE IF NOT EXISTS agent_run_inputs (
+			run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+			input_id TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'accepted',
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (run_id, input_id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS chat_sessions (
+			id TEXT PRIMARY KEY,
+			agent_id TEXT NOT NULL,
+			agent_name TEXT NOT NULL,
+			owner_subject TEXT NOT NULL,
+			messages JSONB NOT NULL DEFAULT '[]',
+			active_run_id TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMPTZ NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_chat_sessions_owner ON chat_sessions (owner_subject, created_at DESC)`,
 	}
 
+	tx, err := p.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin migration transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(84716783723847)`); err != nil {
+		return fmt.Errorf("lock migrations: %w", err)
+	}
 	for _, m := range migrations {
-		if _, err := p.Exec(ctx, m); err != nil {
+		if _, err := tx.Exec(ctx, m); err != nil {
 			return fmt.Errorf("migration failed: %w", err)
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit migrations: %w", err)
 	}
 
 	slog.Info("database migrations applied")

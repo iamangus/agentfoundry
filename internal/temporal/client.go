@@ -18,8 +18,11 @@ import (
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/history/v1"
 	"go.temporal.io/api/operatorservice/v1"
+	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -144,6 +147,9 @@ func (c *Client) ExecuteWorkflowSync(ctx context.Context, params RunAgentParams)
 
 func (c *Client) StartWorkflow(ctx context.Context, params RunAgentParams) (workflowID string, await func(context.Context) (*RunAgentResult, error), err error) {
 	workflowID = params.AgentID + "-" + randomID()
+	if params.StreamID != "" {
+		workflowID = WorkflowIDForRun(params.StreamID, false)
+	}
 	workflowOpts := client.StartWorkflowOptions{
 		ID:               workflowID,
 		TaskQueue:        TaskQueue,
@@ -167,7 +173,7 @@ func (c *Client) StartWorkflow(ctx context.Context, params RunAgentParams) (work
 }
 
 func (c *Client) StartPersistentWorkflow(ctx context.Context, runID string, params RunAgentParams) (workflowID string, await func(context.Context) error, err error) {
-	workflowID = "persistent-" + runID
+	workflowID = WorkflowIDForRun(runID, true)
 	wfRun, err := c.c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
 		ID: workflowID, TaskQueue: TaskQueue, SearchAttributes: c.searchAttrs(&params),
 	}, PersistentWorkflowType, params)
@@ -178,6 +184,13 @@ func (c *Client) StartPersistentWorkflow(ctx context.Context, runID string, para
 		return wfRun.Get(ctx, nil)
 	}
 	return workflowID, await, nil
+}
+
+func WorkflowIDForRun(runID string, persistent bool) string {
+	if persistent {
+		return "persistent-" + runID
+	}
+	return "run-" + runID
 }
 
 func (c *Client) SignalPersistentInput(ctx context.Context, workflowID string, input PersistentInput) error {
@@ -194,6 +207,53 @@ func (c *Client) CancelWorkflow(ctx context.Context, workflowID string) error {
 	}
 	slog.Info("canceled temporal workflow", "workflow_id", workflowID)
 	return nil
+}
+
+func (c *Client) AwaitWorkflow(ctx context.Context, workflowID string, persistent bool) (*RunAgentResult, error) {
+	return awaitWorkflow(ctx, persistent, time.Second, func(result *RunAgentResult) error {
+		if persistent {
+			return c.c.GetWorkflow(ctx, workflowID, "").Get(ctx, nil)
+		}
+		return c.c.GetWorkflow(ctx, workflowID, "").Get(ctx, result)
+	})
+}
+
+func awaitWorkflow(ctx context.Context, persistent bool, interval time.Duration, get func(*RunAgentResult) error) (*RunAgentResult, error) {
+	for attempt := 0; ; attempt++ {
+		var result RunAgentResult
+		err := get(&result)
+		var notFound *serviceerror.NotFound
+		if errors.As(err, &notFound) && attempt < 60 || transientWorkflowLookup(err) {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(interval):
+			}
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if persistent {
+			return nil, nil
+		}
+		return &result, nil
+	}
+}
+
+func transientWorkflowLookup(err error) bool {
+	if err == nil {
+		return false
+	}
+	var unavailable *serviceerror.Unavailable
+	if errors.As(err, &unavailable) {
+		return true
+	}
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.ResourceExhausted:
+		return true
+	}
+	return false
 }
 
 type ExecutionInfo struct {

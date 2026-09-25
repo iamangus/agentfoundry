@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"sync"
 	"time"
 
@@ -55,6 +56,7 @@ type connection struct {
 	client *client.Client
 	config ServerConfig
 	tools  []mcp.Tool
+	refs   int
 
 	// reinitMu serializes session re-initialization attempts so concurrent
 	// callers that hit a terminated session don't stampede the server with
@@ -655,16 +657,28 @@ func (e *EphemeralConn) Close() {
 // RegisterEphemeral adds an EphemeralConn to the pool under its server name.
 // Tools from the ephemeral connection become visible via ListAllTools and
 // CallTool. Call UnregisterEphemeral to remove it.
-func (p *Pool) RegisterEphemeral(e *EphemeralConn) {
+func (p *Pool) RegisterEphemeral(e *EphemeralConn) error {
 	conn := &connection{
 		client: e.client,
 		config: e.config,
 		tools:  e.tools,
+		refs:   1,
 	}
 	p.mu.Lock()
+	if existing := p.ephemeral[e.config.Name]; existing != nil {
+		if !reflect.DeepEqual(existing.config, e.config) {
+			p.mu.Unlock()
+			return fmt.Errorf("MCP server %q already attached with different configuration", e.config.Name)
+		}
+		existing.refs++
+		p.mu.Unlock()
+		e.Close()
+		return nil
+	}
 	p.ephemeral[e.config.Name] = conn
 	p.mu.Unlock()
 	slog.Info("registered ephemeral MCP server in pool", "name", e.config.Name, "tools", len(e.tools))
+	return nil
 }
 
 // UnregisterEphemeral removes a server from the pool by name and closes its
@@ -673,6 +687,11 @@ func (p *Pool) UnregisterEphemeral(name string) {
 	p.mu.Lock()
 	conn, ok := p.ephemeral[name]
 	if !ok {
+		p.mu.Unlock()
+		return
+	}
+	if conn.refs > 1 {
+		conn.refs--
 		p.mu.Unlock()
 		return
 	}

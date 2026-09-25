@@ -3,10 +3,11 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -32,7 +33,6 @@ type DefinitionStore interface {
 	GetDefinitionByID(agentID string) *config.Definition
 	ListDefinitions() []*config.Definition
 	GetRawDefinition(name string) ([]byte, error)
-	SaveRawDefinition(name string, data []byte) error
 }
 
 type VersionedStore interface {
@@ -87,6 +87,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/agents/{agentID}/runs", h.startPersistentRun)
 	mux.HandleFunc("GET /api/v1/runs", h.listRunsByTaskID)
 	mux.HandleFunc("GET /api/v1/runs/{id}", h.getRunStatus)
+	mux.HandleFunc("GET /api/v1/runs/{id}/inputs/{inputID}", h.getRunInputStatus)
 	mux.HandleFunc("GET /api/v1/runs/{id}/trace", h.getRunTrace)
 	mux.HandleFunc("POST /api/v1/runs/{id}/inputs", h.submitPersistentInput)
 	mux.HandleFunc("POST /api/v1/runs/{id}/cancel", h.cancelRun)
@@ -567,6 +568,8 @@ func (h *Handler) startPersistentRun(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		MCPServers     []mcpclient.ServerConfig `json:"mcp_servers,omitempty"`
 		ResponseSchema *config.StructuredOutput `json:"response_schema,omitempty"`
+		ClientKey      string                   `json:"client_key,omitempty"`
+		History        []llm.Message            `json:"history,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
@@ -575,6 +578,18 @@ func (h *Handler) startPersistentRun(w http.ResponseWriter, r *http.Request) {
 	def := h.store.GetDefinitionByID(r.PathValue("agentID"))
 	if def == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+		return
+	}
+	if len(req.ClientKey) > 256 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "client_key is too long"})
+		return
+	}
+	if existing, ok := h.runs.FindActiveClientKey(ac.Subject, req.ClientKey); ok {
+		if existing.AgentName != def.Name || !sameRunMCPServers(existing.MCPServers, req.MCPServers) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "client_key already belongs to a run with different configuration"})
+			return
+		}
+		writeJSON(w, http.StatusAccepted, runAgentResponse{RunID: existing.ID, WorkflowID: existing.WorkflowID})
 		return
 	}
 
@@ -588,52 +603,96 @@ func (h *Handler) startPersistentRun(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "connect MCP server: " + err.Error()})
 			return
 		}
-		h.pool.RegisterEphemeral(econn)
+		if err := h.pool.RegisterEphemeral(econn); err != nil {
+			econn.Close()
+			for _, name := range ephemeralNames {
+				h.pool.UnregisterEphemeral(name)
+			}
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
 		ephemeralNames = append(ephemeralNames, srv.Name)
 	}
 
-	newRun := h.runs.CreatePersistent(def.Name, ac.Subject)
+	attachedJSON, err := json.Marshal(req.MCPServers)
+	if err != nil {
+		for _, name := range ephemeralNames {
+			h.pool.UnregisterEphemeral(name)
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid MCP configuration"})
+		return
+	}
+	newRun, created, err := h.runs.CreatePersistentWithKeyChecked(def.Name, ac.Subject, req.ClientKey, attachedJSON)
+	if err != nil {
+		for _, name := range ephemeralNames {
+			h.pool.UnregisterEphemeral(name)
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to record run"})
+		return
+	}
+	if !created {
+		for _, name := range ephemeralNames {
+			h.pool.UnregisterEphemeral(name)
+		}
+		if newRun.AgentName != def.Name || !sameRunMCPServers(newRun.MCPServers, req.MCPServers) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "client_key already belongs to a run with different configuration"})
+			return
+		}
+		writeJSON(w, http.StatusAccepted, runAgentResponse{RunID: newRun.ID, WorkflowID: newRun.WorkflowID})
+		return
+	}
 	h.runs.SetEphemeralNames(newRun.ID, ephemeralNames)
 	h.streams.Create(newRun.ID)
-	workflowID, await, err := h.temporal.StartPersistentWorkflow(r.Context(), newRun.ID, temporal.RunAgentParams{
-		AgentID: def.AgentID, AgentName: def.Name, MCPServers: req.MCPServers,
-		ResponseSchema: req.ResponseSchema, StreamID: newRun.ID,
-		LLMConfig: h.buildLLMConfig(r.Context(), def), MemoryEnabled: def.MemoryEnabled,
-		MemorySearchAgentID: def.MemorySearchAgentID, MemoryIngestAgentID: def.MemoryIngestAgentID,
-		UserSubject: ac.Subject,
-	})
-	if err != nil {
+	workflowID := temporal.WorkflowIDForRun(newRun.ID, true)
+	if err := h.runs.SetWorkflowID(newRun.ID, workflowID); err != nil {
 		for _, name := range ephemeralNames {
 			h.pool.UnregisterEphemeral(name)
 		}
 		h.streams.Delete(newRun.ID)
 		h.runs.Delete(newRun.ID)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to start workflow: " + err.Error()})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to record workflow identity"})
 		return
 	}
-	h.runs.SetWorkflowID(newRun.ID, workflowID)
-	go h.awaitPersistentRun(newRun.ID, await)
+	_, _, err = h.temporal.StartPersistentWorkflow(r.Context(), newRun.ID, temporal.RunAgentParams{
+		AgentID: def.AgentID, AgentName: def.Name, MCPServers: req.MCPServers,
+		ResponseSchema: req.ResponseSchema, StreamID: newRun.ID, History: req.History,
+		LLMConfig: h.buildLLMConfig(r.Context(), def), MemoryEnabled: def.MemoryEnabled,
+		MemorySearchAgentID: def.MemorySearchAgentID, MemoryIngestAgentID: def.MemoryIngestAgentID,
+		UserSubject: ac.Subject,
+	})
+	if err != nil {
+		slog.Warn("persistent workflow start response uncertain; reconciling by workflow ID", "workflow", workflowID, "error", err)
+	}
+	go h.awaitPersistentRun(newRun.ID, workflowID)
 	writeJSON(w, http.StatusAccepted, runAgentResponse{RunID: newRun.ID, WorkflowID: workflowID})
 }
 
-func (h *Handler) awaitPersistentRun(runID string, await func(context.Context) error) {
-	err := await(context.Background())
+func (h *Handler) awaitPersistentRun(runID, workflowID string) {
+	defer func() {
+		if ru, ok := h.runs.Get(runID); ok {
+			for _, name := range ru.EphemeralNames {
+				h.pool.UnregisterEphemeral(name)
+			}
+		}
+	}()
+	_, err := h.temporal.AwaitWorkflow(context.Background(), workflowID, true)
 	ru, ok := h.runs.Get(runID)
 	if !ok {
 		return
 	}
-	for _, name := range ru.EphemeralNames {
-		h.pool.UnregisterEphemeral(name)
-	}
 	if err != nil && ru.Status != run.StatusCanceled {
-		h.runs.UpdateStatus(runID, run.StatusFailed, "", err.Error())
+		if saveErr := h.runs.WaitForStatus(context.Background(), runID, run.StatusFailed, "", err.Error()); saveErr != nil {
+			return
+		}
 		h.streams.PublishError(runID, "Error: "+err.Error())
 		return
 	}
 	if ru.Status == run.StatusCanceled {
 		return
 	}
-	h.runs.UpdateStatus(runID, run.StatusCompleted, ru.Response, "")
+	if saveErr := h.runs.WaitForStatus(context.Background(), runID, run.StatusCompleted, ru.Response, ""); saveErr != nil {
+		return
+	}
 }
 
 func (h *Handler) submitPersistentInput(w http.ResponseWriter, r *http.Request) {
@@ -664,16 +723,51 @@ func (h *Handler) submitPersistentInput(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "message and input_id are required"})
 		return
 	}
-	if ru.Status == run.StatusWaiting {
+	inputStatus, err := h.runs.InputStatus(ru.ID, req.InputID)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "failed to look up input"})
+		return
+	}
+	if inputStatus == "processed" || inputStatus == "failed" || req.InputID == ru.LastInputID {
+		writeJSON(w, http.StatusAccepted, runAgentResponse{RunID: ru.ID, WorkflowID: ru.WorkflowID})
+		return
+	}
+	if ru.Status == run.StatusRunning {
+		if req.Metadata["source"] == "" && req.InputID != ru.CurrentInputID {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "run is processing an input", "status": string(ru.Status)})
+			return
+		}
+		if err := h.runs.RecordInput(ru.ID, req.InputID); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "failed to record input"})
+			return
+		}
+		if err := h.temporal.SignalPersistentInput(r.Context(), ru.WorkflowID, req); err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusAccepted, runAgentResponse{RunID: ru.ID, WorkflowID: ru.WorkflowID})
+		return
+	}
+	if ru.Status == run.StatusWaiting || h.streams.Get(ru.ID) == nil {
 		// A prior persistent turn closes its SSE stream with `done`; each new
 		// input gets a fresh stream while retaining the same logical run ID.
 		h.streams.Create(ru.ID)
 	}
+	if err := h.runs.BeginInput(ru.ID, req.InputID); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "failed to record pending input"})
+		return
+	}
+	if err := h.runs.RecordInput(ru.ID, req.InputID); err != nil {
+		_ = h.runs.ResetInput(ru.ID, req.InputID, ru.Response, ru.Error)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "failed to record input"})
+		return
+	}
 	if err := h.temporal.SignalPersistentInput(r.Context(), ru.WorkflowID, req); err != nil {
+		// Temporal may have accepted the signal before the response was lost.
+		// Keep the current input identity so retries cannot start a second turn.
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
-	h.runs.UpdateStatus(ru.ID, run.StatusRunning, ru.Response, "")
 	writeJSON(w, http.StatusAccepted, runAgentResponse{RunID: ru.ID, WorkflowID: ru.WorkflowID})
 }
 
@@ -708,18 +802,6 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		def = h.store.GetDefinitionByID(sess.AgentID)
 		sessionID = req.SessionID
-
-		h.sessions.AddMessage(sessionID, session.Message{
-			Role:    "user",
-			Content: req.Message,
-			Time:    time.Now(),
-		})
-
-		allMsgs := h.sessions.Get(sessionID).Messages
-		for i := 0; i < len(allMsgs)-1; i++ {
-			m := allMsgs[i]
-			history = append(history, llm.Message{Role: m.Role, Content: m.Content})
-		}
 	} else {
 		def = h.store.GetDefinitionByID(agentID)
 		history = req.History
@@ -729,25 +811,100 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found: " + agentID})
 		return
 	}
+	if existing, ok := h.runs.FindDispatchKey(ac.Subject, req.TaskID); ok {
+		if existing.AgentName != def.Name || existing.SessionID != sessionID {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "task_id already belongs to a different run"})
+			return
+		}
+		writeJSON(w, http.StatusAccepted, runAgentResponse{RunID: existing.ID, WorkflowID: existing.WorkflowID})
+		return
+	}
+	if sessionID != "" {
+		if sess := h.sessions.Get(sessionID); sess != nil && sess.ActiveRunID != "" {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "session already has an active run"})
+			return
+		}
+	}
 
 	var ephemeralNames []string
 	for _, srv := range req.MCPServers {
 		econn, err := mcpclient.ConnectEphemeral(r.Context(), srv)
 		if err != nil {
-			slog.Error("failed to connect ephemeral MCP server", "name", srv.Name, "url", srv.URL, "error", err)
-			continue
+			for _, name := range ephemeralNames {
+				h.pool.UnregisterEphemeral(name)
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "connect MCP server: " + err.Error()})
+			return
 		}
-		h.pool.RegisterEphemeral(econn)
+		if err := h.pool.RegisterEphemeral(econn); err != nil {
+			econn.Close()
+			for _, name := range ephemeralNames {
+				h.pool.UnregisterEphemeral(name)
+			}
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
 		ephemeralNames = append(ephemeralNames, srv.Name)
 	}
 
-	newRun := h.runs.Create(def.Name, ac.Subject, sessionID, req.TaskID)
+	newRun, created, err := h.runs.CreateByTaskChecked(def.Name, ac.Subject, sessionID, req.TaskID)
+	if err != nil {
+		for _, n := range ephemeralNames {
+			h.pool.UnregisterEphemeral(n)
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to record run"})
+		return
+	}
+	if !created {
+		for _, n := range ephemeralNames {
+			h.pool.UnregisterEphemeral(n)
+		}
+		if newRun.AgentName != def.Name || newRun.SessionID != sessionID {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "task_id already belongs to a different run"})
+			return
+		}
+		writeJSON(w, http.StatusAccepted, runAgentResponse{RunID: newRun.ID, WorkflowID: newRun.WorkflowID})
+		return
+	}
+	if err := h.recordRunMCPServers(newRun.ID, req.MCPServers); err != nil {
+		for _, name := range ephemeralNames {
+			h.pool.UnregisterEphemeral(name)
+		}
+		h.runs.Delete(newRun.ID)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to record run tools"})
+		return
+	}
 	h.streams.Create(newRun.ID)
 	if sessionID != "" {
-		h.sessions.SetActiveRunID(sessionID, newRun.ID)
+		previous, err := h.sessions.StartRun(sessionID, newRun.ID, session.Message{Role: "user", Content: req.Message, Time: time.Now()})
+		if err != nil {
+			h.streams.Delete(newRun.ID)
+			h.runs.Delete(newRun.ID)
+			for _, n := range ephemeralNames {
+				h.pool.UnregisterEphemeral(n)
+			}
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+		for _, m := range previous {
+			history = append(history, llm.Message{Role: m.Role, Content: m.Content})
+		}
 	}
 
-	workflowID, await, err := h.temporal.StartWorkflow(r.Context(), temporal.RunAgentParams{
+	workflowID := temporal.WorkflowIDForRun(newRun.ID, false)
+	if err := h.runs.SetWorkflowID(newRun.ID, workflowID); err != nil {
+		for _, n := range ephemeralNames {
+			h.pool.UnregisterEphemeral(n)
+		}
+		h.streams.Delete(newRun.ID)
+		h.runs.Delete(newRun.ID)
+		if sessionID != "" {
+			_ = h.sessions.CompleteRun(sessionID, newRun.ID, "Error: failed to record workflow identity")
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to record workflow identity"})
+		return
+	}
+	_, _, err = h.temporal.StartWorkflow(r.Context(), temporal.RunAgentParams{
 		AgentID:             def.AgentID,
 		AgentName:           def.Name,
 		Message:             req.Message,
@@ -763,68 +920,71 @@ func (h *Handler) runAgent(w http.ResponseWriter, r *http.Request) {
 		UserSubject:         ac.Subject,
 	})
 	if err != nil {
-		for _, n := range ephemeralNames {
-			h.pool.UnregisterEphemeral(n)
-		}
-		h.streams.Delete(newRun.ID)
-		h.runs.Delete(newRun.ID)
-		if sessionID != "" {
-			h.sessions.ClearActiveRunID(sessionID)
-		}
-		slog.Error("failed to start temporal workflow", "agent", def.Name, "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to start workflow: " + err.Error()})
-		return
+		slog.Warn("workflow start response uncertain; reconciling by workflow ID", "workflow", workflowID, "error", err)
 	}
 
-	h.runs.SetWorkflowID(newRun.ID, workflowID)
-
 	go func() {
-		ctx := context.WithoutCancel(r.Context())
-
 		cleanup := func() {
-			for _, n := range ephemeralNames {
-				h.pool.UnregisterEphemeral(n)
-			}
-			time.AfterFunc(5*time.Minute, func() {
-				h.runs.Delete(newRun.ID)
-			})
 			time.AfterFunc(30*time.Second, func() {
 				h.streams.Delete(newRun.ID)
 			})
 		}
 
-		agentResult, err := await(ctx)
+		agentResult, err := h.temporal.AwaitWorkflow(context.Background(), workflowID, false)
+		for _, n := range ephemeralNames {
+			h.pool.UnregisterEphemeral(n)
+		}
+		current, ok := h.runs.Get(newRun.ID)
+		if !ok || current.Status == run.StatusCanceled {
+			cleanup()
+			return
+		}
 		if err != nil {
 			slog.Error("agent run failed", "agent", def.Name, "run_id", newRun.ID, "error", err)
-			h.runs.UpdateStatus(newRun.ID, run.StatusFailed, "", err.Error())
-			h.streams.PublishError(newRun.ID, "Error: "+err.Error())
-			if sessionID != "" {
-				h.sessions.AddMessage(sessionID, session.Message{
-					Role:    "assistant",
-					Content: "Error: " + err.Error(),
-					Time:    time.Now(),
-				})
-				h.sessions.ClearActiveRunID(sessionID)
+			if saveErr := h.runs.WaitForStatus(context.Background(), newRun.ID, run.StatusFailed, "", err.Error()); saveErr != nil {
+				cleanup()
+				return
 			}
+			if sessionID != "" {
+				_ = h.sessions.CompleteRunUntil(context.Background(), sessionID, newRun.ID, "Error: "+err.Error())
+			}
+			h.streams.PublishError(newRun.ID, "Error: "+err.Error())
 			cleanup()
 			return
 		}
 
 		slog.Info("agent run completed", "agent", def.Name, "run_id", newRun.ID)
-		h.runs.UpdateStatus(newRun.ID, run.StatusCompleted, agentResult.Response, "")
-		h.streams.PublishDone(newRun.ID, agentResult.Response)
-		if sessionID != "" {
-			h.sessions.AddMessage(sessionID, session.Message{
-				Role:    "assistant",
-				Content: agentResult.Response,
-				Time:    time.Now(),
-			})
-			h.sessions.ClearActiveRunID(sessionID)
+		if err := h.runs.WaitForStatus(context.Background(), newRun.ID, run.StatusCompleted, agentResult.Response, ""); err != nil {
+			cleanup()
+			return
 		}
+		if sessionID != "" {
+			_ = h.sessions.CompleteRunUntil(context.Background(), sessionID, newRun.ID, agentResult.Response)
+		}
+		h.streams.PublishDone(newRun.ID, agentResult.Response)
 		cleanup()
 	}()
 
 	writeJSON(w, http.StatusAccepted, runAgentResponse{RunID: newRun.ID, WorkflowID: workflowID})
+}
+
+func (h *Handler) recordRunMCPServers(id string, servers []mcpclient.ServerConfig) error {
+	data, err := json.Marshal(servers)
+	if err != nil {
+		return err
+	}
+	return h.runs.SetMCPServers(id, data)
+}
+
+func sameRunMCPServers(raw json.RawMessage, requested []mcpclient.ServerConfig) bool {
+	var attached []mcpclient.ServerConfig
+	if err := json.Unmarshal(raw, &attached); err != nil {
+		return false
+	}
+	if len(attached) == 0 && len(requested) == 0 {
+		return true
+	}
+	return reflect.DeepEqual(attached, requested)
 }
 
 func (h *Handler) getRunStatus(w http.ResponseWriter, r *http.Request) {
@@ -836,6 +996,25 @@ func (h *Handler) getRunStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, ru)
+}
+
+func (h *Handler) getRunInputStatus(w http.ResponseWriter, r *http.Request) {
+	ru, ok := h.runs.Get(r.PathValue("id"))
+	ac := auth.FromContext(r)
+	if !ok || ac == nil || ru.Owner != ac.Subject {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "run not found"})
+		return
+	}
+	status, err := h.runs.InputStatus(ru.ID, r.PathValue("inputID"))
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "input status unavailable"})
+		return
+	}
+	if status == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "input not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"input_id": r.PathValue("inputID"), "status": status})
 }
 
 // getRunTrace exposes only the Temporal execution associated with a run the
@@ -904,10 +1083,20 @@ func (h *Handler) cancelRun(w http.ResponseWriter, r *http.Request) {
 	if ru.WorkflowID != "" {
 		if err := h.temporal.CancelWorkflow(r.Context(), ru.WorkflowID); err != nil {
 			slog.Error("failed to cancel temporal workflow", "run_id", id, "workflow_id", ru.WorkflowID, "error", err)
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "failed to cancel workflow"})
+			return
 		}
 	}
 
-	h.runs.UpdateStatus(id, run.StatusCanceled, "", "canceled by user")
+	if err := h.runs.UpdateStatus(id, run.StatusCanceled, "", "canceled by user"); err != nil {
+		if errors.Is(err, run.ErrTerminal) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "run is already terminal"})
+			return
+		}
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "failed to record cancellation"})
+		return
+	}
+	h.streams.PublishError(id, "canceled by user")
 	slog.Info("run canceled", "run_id", id)
 	w.WriteHeader(http.StatusOK)
 }
@@ -1024,7 +1213,11 @@ func (h *Handler) createChatSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess := h.sessions.Create(def.AgentID, def.Name, ac.Subject)
+	sess, err := h.sessions.CreateChecked(def.AgentID, def.Name, ac.Subject)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create session"})
+		return
+	}
 	writeJSON(w, http.StatusCreated, sess)
 }
 
@@ -1070,8 +1263,13 @@ func (h *Handler) runEvents(w http.ResponseWriter, r *http.Request) {
 
 	runStream := h.streams.Get(runID)
 	if runStream == nil {
-		http.Error(w, "run not found", http.StatusNotFound)
-		return
+		runStream = h.streams.Create(runID)
+		switch ru.Status {
+		case run.StatusCompleted, run.StatusWaiting:
+			h.streams.PublishDone(runID, ru.Response)
+		case run.StatusFailed, run.StatusCanceled:
+			h.streams.PublishError(runID, ru.Error)
+		}
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -1125,23 +1323,6 @@ func (h *Handler) runEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-}
-
-// --- Raw agent update (kept for backward compatibility) ---
-
-func (h *Handler) updateAgentRaw(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	data, err := io.ReadAll(r.Body)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to read body"})
-		return
-	}
-	if err := h.store.SaveRawDefinition(name, data); err != nil {
-		slog.Error("failed to save raw agent", "name", name, "error", err)
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
 type createAPIKeyRequest struct {
