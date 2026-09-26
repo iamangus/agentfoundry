@@ -1,6 +1,64 @@
 package temporal
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"go.temporal.io/sdk/client"
+)
+
+type steeringClient struct {
+	client.Client
+	opts   client.UpdateWorkflowOptions
+	handle client.WorkflowUpdateHandle
+	err    error
+}
+
+func (s *steeringClient) UpdateWorkflow(_ context.Context, opts client.UpdateWorkflowOptions) (client.WorkflowUpdateHandle, error) {
+	s.opts = opts
+	return s.handle, s.err
+}
+
+type steeringHandle struct {
+	accepted bool
+	err      error
+}
+
+func (s steeringHandle) WorkflowID() string { return "workflow-1" }
+func (s steeringHandle) RunID() string      { return "execution-1" }
+func (s steeringHandle) UpdateID() string   { return "follow-up" }
+func (s steeringHandle) Get(_ context.Context, valuePtr interface{}) error {
+	if s.err != nil {
+		return s.err
+	}
+	*(valuePtr.(*bool)) = s.accepted
+	return nil
+}
+
+func TestSteerPersistentInputUsesStableUpdateID(t *testing.T) {
+	sdk := &steeringClient{handle: steeringHandle{accepted: true}}
+	c := &Client{c: sdk}
+	input := PersistentInput{InputID: "follow-up", Message: "new direction", Metadata: map[string]string{"source": "web"}}
+	accepted, err := c.SteerPersistentInput(t.Context(), "workflow-1", input)
+	if err != nil || !accepted {
+		t.Fatalf("steering result: accepted=%v err=%v", accepted, err)
+	}
+	if sdk.opts.WorkflowID != "workflow-1" || sdk.opts.UpdateID != "follow-up" || sdk.opts.UpdateName != PersistentSteerUpdate || sdk.opts.WaitForStage != client.WorkflowUpdateStageCompleted {
+		t.Fatalf("unexpected update options: %+v", sdk.opts)
+	}
+	if len(sdk.opts.Args) != 1 || sdk.opts.Args[0].(PersistentInput).Message != input.Message {
+		t.Fatalf("update payload changed: %+v", sdk.opts.Args)
+	}
+	sdk.handle = steeringHandle{accepted: false}
+	if accepted, err := c.SteerPersistentInput(t.Context(), "workflow-1", input); err != nil || accepted {
+		t.Fatalf("late update must be rejected: accepted=%v err=%v", accepted, err)
+	}
+	sdk.handle = steeringHandle{err: errors.New("unavailable")}
+	if _, err := c.SteerPersistentInput(t.Context(), "workflow-1", input); err == nil {
+		t.Fatal("unknown update outcome was reported as accepted")
+	}
+}
 
 func TestNormalizeExecutionTrace(t *testing.T) {
 	detail := &ExecutionDetail{

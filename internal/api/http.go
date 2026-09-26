@@ -710,10 +710,6 @@ func (h *Handler) submitPersistentInput(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "run does not accept inputs"})
 		return
 	}
-	if ru.Status == run.StatusCanceled || ru.Status == run.StatusCompleted || ru.Status == run.StatusFailed {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "run is not active", "status": string(ru.Status)})
-		return
-	}
 	var req temporal.PersistentInput
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
@@ -726,6 +722,39 @@ func (h *Handler) submitPersistentInput(w http.ResponseWriter, r *http.Request) 
 	inputStatus, err := h.runs.InputStatus(ru.ID, req.InputID)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "failed to look up input"})
+		return
+	}
+	if req.Metadata["source"] == "web" {
+		if inputStatus == "processed" {
+			writeJSON(w, http.StatusAccepted, runAgentResponse{RunID: ru.ID, WorkflowID: ru.WorkflowID})
+			return
+		}
+		if inputStatus == "failed" {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "steering input failed", "code": "input_failed"})
+			return
+		}
+		if ru.Status == run.StatusCanceled || ru.Status == run.StatusCompleted || ru.Status == run.StatusFailed {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "run is not active", "status": string(ru.Status)})
+			return
+		}
+		accepted, err := h.temporal.SteerPersistentInput(r.Context(), ru.WorkflowID, req)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		if !accepted {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "active turn no longer accepts steering"})
+			return
+		}
+		if err := h.runs.RecordInput(ru.ID, req.InputID); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "failed to record steering input"})
+			return
+		}
+		writeJSON(w, http.StatusAccepted, runAgentResponse{RunID: ru.ID, WorkflowID: ru.WorkflowID})
+		return
+	}
+	if ru.Status == run.StatusCanceled || ru.Status == run.StatusCompleted || ru.Status == run.StatusFailed {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "run is not active", "status": string(ru.Status)})
 		return
 	}
 	if inputStatus == "processed" || inputStatus == "failed" || req.InputID == ru.LastInputID {

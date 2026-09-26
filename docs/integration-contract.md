@@ -36,10 +36,14 @@ to that message, not the latest channel seen by the conversation.
 
 Foundry stores run ownership, status, result, UI chat sessions, and input receipts in Postgres.
 The owner-scoped `GET /api/v1/runs/{id}/inputs/{inputID}` reports `accepted`,
-`processed`, or `failed`. A successful input submission means Temporal accepted
-the signal; an event is *processed* only after the worker has finished the
+`processed`, or `failed`. A successful ordinary input submission means Temporal
+accepted the signal; an event is *processed* only after the worker has finished the
 turn that included that input. Eve completes a queued internal event only after
 receiving the processed receipt. On a timeout it retries with the same ID.
+A visible web follow-up instead uses a Temporal Update keyed by its input ID.
+The worker accepts it only while the active turn can incorporate it; otherwise
+Foundry rejects it and Eve queues a separate turn. An accepted follow-up shares
+the original turn's final result and never replaces its input ID.
 OpenDev does not mark an outbox notification delivered when Eve merely accepts
 the webhook: it checks Eve's authenticated durable event status, polling until
 `done`. Eve's terminal `failed` status remains inspectable in both services.

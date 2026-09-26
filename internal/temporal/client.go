@@ -31,6 +31,7 @@ const (
 	WorkflowType           = "RunAgentWorkflow"
 	PersistentWorkflowType = "PersistentRunWorkflow"
 	PersistentInputSignal  = "persistent-input"
+	PersistentSteerUpdate  = "persistent-steer"
 )
 
 type LLMConfigInput struct {
@@ -198,6 +199,24 @@ func (c *Client) SignalPersistentInput(ctx context.Context, workflowID string, i
 		return fmt.Errorf("signal persistent workflow: %w", err)
 	}
 	return nil
+}
+
+func (c *Client) SteerPersistentInput(ctx context.Context, workflowID string, input PersistentInput) (bool, error) {
+	handle, err := c.c.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+		WorkflowID:   workflowID,
+		UpdateID:     input.InputID,
+		UpdateName:   PersistentSteerUpdate,
+		WaitForStage: client.WorkflowUpdateStageCompleted,
+		Args:         []interface{}{input},
+	})
+	if err != nil {
+		return false, fmt.Errorf("steer workflow: %w", err)
+	}
+	var accepted bool
+	if err := handle.Get(ctx, &accepted); err != nil {
+		return false, fmt.Errorf("steer workflow: %w", err)
+	}
+	return accepted, nil
 }
 
 func (c *Client) CancelWorkflow(ctx context.Context, workflowID string) error {

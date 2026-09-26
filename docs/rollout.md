@@ -20,10 +20,16 @@
    An uncertain Temporal signal stays attached to its input ID; Eve retries
    that ID until Foundry confirms submission. Channel delivery failures retain
    the active turn and retry with persisted backoff.
-4. Deploy OpenDev's foundation gate. Owned non-fork repositories lacking a
+ 4. Deploy OpenDev's foundation gate. Owned non-fork repositories lacking a
    foundation receive a PR on provision or first coding job; ordinary catalog
    sync does not create PRs. Already-ready repositories retain their recorded
-   foundation version until an explicit migration is requested.
+    foundation version until an explicit migration is requested.
+
+For a later steering-only release on an installation with durable runs already
+deployed, update the worker's Temporal steering handler first, Foundry's
+conditional steering API second, and Eve last. Existing ordinary turns still
+use signals during this rollout. A web follow-up is acknowledged only after
+the worker accepts it into the current turn; late arrivals become queued turns.
 
 CI runs the empty-database and restart/idempotency checks against Postgres,
 the worker's in-memory Temporal workflow test, every repository's Go tests and
