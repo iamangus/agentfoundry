@@ -16,12 +16,12 @@ import (
 )
 
 type inferenceStreamDelta struct {
-	Role             string           `json:"role,omitempty"`
-	Content          *string          `json:"content,omitempty"`
-	Reasoning        *string          `json:"reasoning,omitempty"`
+	Role             string            `json:"role,omitempty"`
+	Content          *string           `json:"content,omitempty"`
+	Reasoning        *string           `json:"reasoning,omitempty"`
 	ReasoningDetails []json.RawMessage `json:"reasoning_details,omitempty"`
 	ToolCalls        []struct {
-		Index    int    `json:"index"`
+		Index    int `json:"index"`
 		Function struct {
 			Name      string `json:"name"`
 			Arguments string `json:"arguments"`
@@ -61,12 +61,18 @@ func (h *Handler) inferenceProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if def.ProviderID == "" {
+	providerID := def.ProviderID
+	model := def.Model
+	backup := r.Header.Get("X-AgentFoundry-Backup") == "true"
+	if backup {
+		providerID, model = def.BackupProviderID, def.BackupModel
+	}
+	if providerID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent has no provider configured"})
 		return
 	}
 
-	prov, err := h.providerStore.GetByID(r.Context(), def.ProviderID)
+	prov, err := h.providerStore.GetByID(r.Context(), providerID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "provider not found: " + err.Error()})
 		return
@@ -88,7 +94,21 @@ func (h *Handler) inferenceProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bodyBytes = mergeInferenceParams(bodyBytes, prov.Reasoning, def.ModelParams)
+	if model == "" {
+		model = prov.DefaultModel
+	}
+	// Routing is server-owned: the worker can select only this agent's backup,
+	// never an arbitrary provider or credentials. Do not leak primary tuning to
+	// a different model; the backup uses its provider's defaults.
+	params := def.ModelParams
+	if backup {
+		params = nil
+	}
+	bodyBytes, err = prepareInferencePayload(bodyBytes, model, prov.SchemaValidation, prov.Reasoning, params)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, targetURL, bytes.NewReader(bodyBytes))
 	if err != nil {
@@ -120,6 +140,8 @@ func (h *Handler) inferenceProxy(w http.ResponseWriter, r *http.Request) {
 			w.Header().Add(k, v)
 		}
 	}
+	w.Header().Set("X-AgentFoundry-Provider", providerID)
+	w.Header().Set("X-AgentFoundry-Model", model)
 	w.WriteHeader(resp.StatusCode)
 
 	logPath := fmt.Sprintf("/data/inference_%s_%d.log", agentID, time.Now().UnixNano())
@@ -129,11 +151,12 @@ func (h *Handler) inferenceProxy(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("failed to create inference log", "path", logPath, "error", logErr)
 	} else {
 		defer logFile.Close()
-		fmt.Fprintf(logFile, "# agent_id=%s provider=%s model=%s\n", agentID, prov.Name, def.Model)
+		fmt.Fprintf(logFile, "# agent_id=%s provider=%s model=%s backup=%t\n", agentID, prov.Name, model, backup)
 	}
 
-	if flusher, ok := w.(http.Flusher); ok {
+	if flusher, ok := w.(http.Flusher); ok && strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
 		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
 
@@ -212,6 +235,25 @@ func (h *Handler) inferenceProxy(w http.ResponseWriter, r *http.Request) {
 
 func isNonEmptyJSON(raw json.RawMessage) bool {
 	return len(raw) > 0 && !bytes.Equal(raw, []byte("{}")) && !bytes.Equal(raw, []byte("null"))
+}
+
+func prepareInferencePayload(body []byte, model string, supportsSchema bool, extras ...json.RawMessage) ([]byte, error) {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil || payload == nil {
+		return nil, fmt.Errorf("invalid inference JSON object")
+	}
+	if err := json.Unmarshal(mergeInferenceParams(body, extras...), &payload); err != nil {
+		return nil, err
+	}
+	payload["model"] = model
+	if format, ok := payload["response_format"].(map[string]any); ok && format["type"] == "json_schema" && !supportsSchema {
+		schema, _ := json.Marshal(format["json_schema"])
+		if messages, ok := payload["messages"].([]any); ok {
+			payload["messages"] = append([]any{map[string]any{"role": "system", "content": "Respond with ONLY valid JSON matching this schema: " + string(schema)}}, messages...)
+		}
+		payload["response_format"] = map[string]any{"type": "json_object"}
+	}
+	return json.Marshal(payload)
 }
 
 func mergeInferenceParams(body []byte, extras ...json.RawMessage) []byte {

@@ -33,7 +33,7 @@ func NewDBStore(pool *pgxpool.Pool, reg AgentRegistrar) *DBStore {
 func (s *DBStore) LoadAll(ctx context.Context) error {
 	rows, err := s.pool.Query(ctx, `SELECT agent_id, name, kind, description, model, system_prompt, tools,
 			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id,
-			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params, handoff_to, handoffs, pre_inference_processors
+			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params, handoff_to, handoffs, pre_inference_processors, backup_provider_id, backup_model
 			FROM agent_definitions ORDER BY name`)
 	if err != nil {
 		return fmt.Errorf("query agent definitions: %w", err)
@@ -66,11 +66,13 @@ func (s *DBStore) LoadAll(ctx context.Context) error {
 			HandoffTo              string
 			Handoffs               []byte
 			PreInferenceProcessors []byte
+			BackupProviderID       string
+			BackupModel            string
 		}
 		if err := rows.Scan(&row.AgentID, &row.Name, &row.Kind, &row.Description, &row.Model,
 			&row.SystemPrompt, &row.Tools, &row.MaxTurns, &row.MaxConcurrentTools, &row.ForceJSON,
 			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID,
-			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides, &row.ModelParams, &row.HandoffTo, &row.Handoffs, &row.PreInferenceProcessors); err != nil {
+			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides, &row.ModelParams, &row.HandoffTo, &row.Handoffs, &row.PreInferenceProcessors, &row.BackupProviderID, &row.BackupModel); err != nil {
 			slog.Error("failed to scan agent definition row", "error", err)
 			continue
 		}
@@ -89,6 +91,8 @@ func (s *DBStore) LoadAll(ctx context.Context) error {
 			Team:                row.Team,
 			CreatedBy:           row.CreatedBy,
 			ProviderID:          row.ProviderID,
+			BackupProviderID:    row.BackupProviderID,
+			BackupModel:         row.BackupModel,
 			MemoryEnabled:       row.MemoryEnabled,
 			MemorySearchAgentID: row.MemorySearchAgentID,
 			MemoryIngestAgentID: row.MemoryIngestAgentID,
@@ -192,8 +196,8 @@ func (s *DBStore) SaveDefinition(def *config.Definition) error {
 		INSERT INTO agent_definitions
 			(agent_id, name, kind, description, model, system_prompt, tools,
 			 max_turns, max_concurrent_tools, force_json, structured_output,
-			 scope, team, created_by, provider_id, memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params, handoff_to, handoffs, pre_inference_processors, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, NOW())
+			 scope, team, created_by, provider_id, memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params, handoff_to, handoffs, pre_inference_processors, backup_provider_id, backup_model, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, NOW())
 		ON CONFLICT (name) DO UPDATE SET
 			description         = EXCLUDED.description,
 			model               = EXCLUDED.model,
@@ -206,6 +210,8 @@ func (s *DBStore) SaveDefinition(def *config.Definition) error {
 			scope               = EXCLUDED.scope,
 			team                = EXCLUDED.team,
 			provider_id         = EXCLUDED.provider_id,
+			backup_provider_id = EXCLUDED.backup_provider_id,
+			backup_model = EXCLUDED.backup_model,
 			memory_enabled         = EXCLUDED.memory_enabled,
 			memory_search_agent_id = EXCLUDED.memory_search_agent_id,
 			memory_ingest_agent_id = EXCLUDED.memory_ingest_agent_id,
@@ -219,7 +225,7 @@ func (s *DBStore) SaveDefinition(def *config.Definition) error {
 		def.SystemPrompt, toolsJSON, def.MaxTurns, def.MaxConcurrentTools,
 		def.ForceJSON, soJSON, def.Scope, def.Team, def.CreatedBy, def.ProviderID,
 		def.MemoryEnabled, def.MemorySearchAgentID, def.MemoryIngestAgentID, def.ToolOverrides, def.ModelParams,
-		def.HandoffTo, handoffsJSON, processorsJSON,
+		def.HandoffTo, handoffsJSON, processorsJSON, def.BackupProviderID, def.BackupModel,
 	)
 	if err != nil {
 		return fmt.Errorf("save agent definition: %w", err)
@@ -273,16 +279,18 @@ func (s *DBStore) GetDefinition(name string) *config.Definition {
 		HandoffTo              string
 		Handoffs               []byte
 		PreInferenceProcessors []byte
+		BackupProviderID       string
+		BackupModel            string
 	}
 	err := s.pool.QueryRow(ctx, `
 		SELECT agent_id, name, kind, description, model, system_prompt, tools,
 			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id,
-			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params, handoff_to, handoffs, pre_inference_processors
+			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params, handoff_to, handoffs, pre_inference_processors, backup_provider_id, backup_model
 		FROM agent_definitions WHERE name = $1`, name).
 		Scan(&row.AgentID, &row.Name, &row.Kind, &row.Description, &row.Model,
 			&row.SystemPrompt, &row.Tools, &row.MaxTurns, &row.MaxConcurrentTools, &row.ForceJSON,
 			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID,
-			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides, &row.ModelParams, &row.HandoffTo, &row.Handoffs, &row.PreInferenceProcessors)
+			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides, &row.ModelParams, &row.HandoffTo, &row.Handoffs, &row.PreInferenceProcessors, &row.BackupProviderID, &row.BackupModel)
 	if err != nil {
 		return nil
 	}
@@ -301,6 +309,8 @@ func (s *DBStore) GetDefinition(name string) *config.Definition {
 		Team:                row.Team,
 		CreatedBy:           row.CreatedBy,
 		ProviderID:          row.ProviderID,
+		BackupProviderID:    row.BackupProviderID,
+		BackupModel:         row.BackupModel,
 		MemoryEnabled:       row.MemoryEnabled,
 		MemorySearchAgentID: row.MemorySearchAgentID,
 		MemoryIngestAgentID: row.MemoryIngestAgentID,
@@ -357,16 +367,18 @@ func (s *DBStore) GetDefinitionByID(agentID string) *config.Definition {
 		HandoffTo              string
 		Handoffs               []byte
 		PreInferenceProcessors []byte
+		BackupProviderID       string
+		BackupModel            string
 	}
 	err := s.pool.QueryRow(ctx, `
 		SELECT agent_id, name, kind, description, model, system_prompt, tools,
 			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id,
-			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params, handoff_to, handoffs, pre_inference_processors
+			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params, handoff_to, handoffs, pre_inference_processors, backup_provider_id, backup_model
 		FROM agent_definitions WHERE agent_id = $1`, agentID).
 		Scan(&row.AgentID, &row.Name, &row.Kind, &row.Description, &row.Model,
 			&row.SystemPrompt, &row.Tools, &row.MaxTurns, &row.MaxConcurrentTools, &row.ForceJSON,
 			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID,
-			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides, &row.ModelParams, &row.HandoffTo, &row.Handoffs, &row.PreInferenceProcessors)
+			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides, &row.ModelParams, &row.HandoffTo, &row.Handoffs, &row.PreInferenceProcessors, &row.BackupProviderID, &row.BackupModel)
 	if err != nil {
 		return nil
 	}
@@ -385,6 +397,8 @@ func (s *DBStore) GetDefinitionByID(agentID string) *config.Definition {
 		Team:                row.Team,
 		CreatedBy:           row.CreatedBy,
 		ProviderID:          row.ProviderID,
+		BackupProviderID:    row.BackupProviderID,
+		BackupModel:         row.BackupModel,
 		MemoryEnabled:       row.MemoryEnabled,
 		MemorySearchAgentID: row.MemorySearchAgentID,
 		MemoryIngestAgentID: row.MemoryIngestAgentID,
@@ -420,7 +434,7 @@ func (s *DBStore) ListDefinitions() []*config.Definition {
 	ctx := context.Background()
 	rows, err := s.pool.Query(ctx, `SELECT agent_id, name, kind, description, model, system_prompt, tools,
 			max_turns, max_concurrent_tools, force_json, structured_output, scope, team, created_by, provider_id,
-			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params, handoff_to, handoffs, pre_inference_processors
+			memory_enabled, memory_search_agent_id, memory_ingest_agent_id, tool_overrides, model_params, handoff_to, handoffs, pre_inference_processors, backup_provider_id, backup_model
 			FROM agent_definitions ORDER BY name`)
 	if err != nil {
 		slog.Error("failed to list agent definitions", "error", err)
@@ -453,11 +467,13 @@ func (s *DBStore) ListDefinitions() []*config.Definition {
 			HandoffTo              string
 			Handoffs               []byte
 			PreInferenceProcessors []byte
+			BackupProviderID       string
+			BackupModel            string
 		}
 		if err := rows.Scan(&row.AgentID, &row.Name, &row.Kind, &row.Description, &row.Model,
 			&row.SystemPrompt, &row.Tools, &row.MaxTurns, &row.MaxConcurrentTools, &row.ForceJSON,
 			&row.StructuredOutput, &row.Scope, &row.Team, &row.CreatedBy, &row.ProviderID,
-			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides, &row.ModelParams, &row.HandoffTo, &row.Handoffs, &row.PreInferenceProcessors); err != nil {
+			&row.MemoryEnabled, &row.MemorySearchAgentID, &row.MemoryIngestAgentID, &row.ToolOverrides, &row.ModelParams, &row.HandoffTo, &row.Handoffs, &row.PreInferenceProcessors, &row.BackupProviderID, &row.BackupModel); err != nil {
 			slog.Error("failed to scan agent definition row", "error", err)
 			continue
 		}
@@ -476,6 +492,8 @@ func (s *DBStore) ListDefinitions() []*config.Definition {
 			Team:                row.Team,
 			CreatedBy:           row.CreatedBy,
 			ProviderID:          row.ProviderID,
+			BackupProviderID:    row.BackupProviderID,
+			BackupModel:         row.BackupModel,
 			MemoryEnabled:       row.MemoryEnabled,
 			MemorySearchAgentID: row.MemorySearchAgentID,
 			MemoryIngestAgentID: row.MemoryIngestAgentID,
