@@ -237,6 +237,10 @@ func (h *Handler) createAgent(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	if err := h.validateBackupProvider(r, &def); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	switch config.Scope(def.Scope) {
 	case config.ScopeGlobal:
 		if !ac.IsGlobalAdmin {
@@ -334,6 +338,10 @@ func (h *Handler) updateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.validateHandoffTargets(&def); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := h.validateBackupProvider(r, &def); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

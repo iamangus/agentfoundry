@@ -327,16 +327,20 @@ type ExecutionTrace struct {
 }
 
 type TraceEvent struct {
-	EventID   int64  `json:"event_id"`
-	EventTime string `json:"event_time"`
-	Kind      string `json:"kind"`
-	Activity  string `json:"activity,omitempty"`
-	Model     string `json:"model,omitempty"`
-	Tool      string `json:"tool,omitempty"`
-	Schema    any    `json:"schema,omitempty"`
-	Input     any    `json:"input,omitempty"`
-	Output    any    `json:"output,omitempty"`
-	Error     any    `json:"error,omitempty"`
+	EventID        int64  `json:"event_id"`
+	EventTime      string `json:"event_time"`
+	Kind           string `json:"kind"`
+	Activity       string `json:"activity,omitempty"`
+	Model          string `json:"model,omitempty"`
+	ProviderID     string `json:"provider_id,omitempty"`
+	Backup         bool   `json:"backup,omitempty"`
+	FailoverReason string `json:"failover_reason,omitempty"`
+	Attempts       int64  `json:"attempts,omitempty"`
+	Tool           string `json:"tool,omitempty"`
+	Schema         any    `json:"schema,omitempty"`
+	Input          any    `json:"input,omitempty"`
+	Output         any    `json:"output,omitempty"`
+	Error          any    `json:"error,omitempty"`
 }
 
 type spanDatum struct {
@@ -532,6 +536,10 @@ func NormalizeExecutionTrace(detail *ExecutionDetail) *ExecutionTrace {
 			switch kind {
 			case "model":
 				traceEvent.Model = stringValue(mapValue(input, "request"), "model")
+				modelInput, _ := input.(map[string]interface{})
+				traceEvent.Backup, _ = modelInput["backup"].(bool)
+				traceEvent.ProviderID = stringValue(input, "provider_id")
+				traceEvent.FailoverReason = stringValue(input, "failover_reason")
 				traceEvent.Schema = mapValue(input, "request")["response_format"]
 			case "tool":
 				server := stringValue(input, "server_name")
@@ -542,6 +550,11 @@ func NormalizeExecutionTrace(detail *ExecutionDetail) *ExecutionTrace {
 			}
 			scheduled[event.EventID] = len(trace.Events)
 			trace.Events = append(trace.Events, traceEvent)
+		case "ActivityTaskStarted":
+			attrs := mapValue(details, "activityTaskStartedEventAttributes")
+			if index, ok := scheduled[intValue(attrs, "scheduledEventId")]; ok {
+				trace.Events[index].Attempts = intValue(attrs, "attempt")
+			}
 		case "ActivityTaskCompleted", "ActivityTaskFailed", "ActivityTaskTimedOut", "ActivityTaskCanceled":
 			attrs := mapValue(details, strings.ToLower(event.EventType[:1])+event.EventType[1:]+"EventAttributes")
 			index, ok := scheduled[intValue(attrs, "scheduledEventId")]
@@ -550,6 +563,19 @@ func NormalizeExecutionTrace(detail *ExecutionDetail) *ExecutionTrace {
 			}
 			if event.EventType == "ActivityTaskCompleted" {
 				trace.Events[index].Output = unwrapPayload(mapValue(attrs, "result"))
+				if trace.Events[index].Kind == "model" {
+					output, _ := trace.Events[index].Output.(map[string]interface{})
+					response := mapValue(output, "response")
+					if model := stringValue(response, "model"); model != "" {
+						trace.Events[index].Model = model
+					}
+					if provider := stringValue(response, "provider_id"); provider != "" {
+						trace.Events[index].ProviderID = provider
+					}
+					if attempts := intValue(output, "attempts"); attempts > 0 {
+						trace.Events[index].Attempts = attempts
+					}
+				}
 			} else {
 				trace.Events[index].Error = mapValue(attrs, "failure")
 			}
@@ -591,8 +617,18 @@ func stringValue(value any, keys ...string) string {
 }
 
 func intValue(value any, key string) int64 {
-	if n, ok := valueAt(value, key).(float64); ok {
+	switch n := valueAt(value, key).(type) {
+	case float64:
 		return int64(n)
+	case int:
+		return int64(n)
+	case int32:
+		return int64(n)
+	case int64:
+		return n
+	case json.Number:
+		value, _ := n.Int64()
+		return value
 	}
 	return 0
 }
