@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -151,7 +152,8 @@ func main() {
 		fmt.Fprint(w, "ok")
 	})
 
-	mcpManager := mcpserver.NewManager(reg, pool, temporalClient)
+	mcpManager := mcpserver.NewManager(reg, pool, temporalClient,
+		mcpserver.WithAllowedOrigins(strings.Split(os.Getenv("MCP_ALLOWED_ORIGINS"), ",")...))
 	mcpManager.RegisterRoutes(mux)
 
 	pool.OnToolsChanged(func() {

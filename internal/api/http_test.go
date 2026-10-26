@@ -58,3 +58,14 @@ func TestExtractMCPContentEmpty(t *testing.T) {
 		t.Fatalf("expected no blocks, got %+v", blocks)
 	}
 }
+
+func TestExtractMCPStructuredOnlyResult(t *testing.T) {
+	text, blocks := extractMCPContent(mcp.NewToolResultStructuredOnly(map[string]any{"answer": 42}))
+	if text != `{"answer":42}` || len(blocks) != 1 || blocks[0].Type != "text" {
+		t.Fatalf("%q %+v", text, blocks)
+	}
+	text, blocks = extractMCPContent(mcp.NewToolResultStructured(map[string]any{"answer": 42}, "answer is 42"))
+	if text != "answer is 42" || len(blocks) != 1 {
+		t.Fatalf("duplicated structured fallback: %q %+v", text, blocks)
+	}
+}

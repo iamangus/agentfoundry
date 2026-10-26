@@ -30,6 +30,9 @@ func (dt *DiscoveredTool) QualifiedName() string {
 
 // InputSchemaJSON returns the tool's input schema as json.RawMessage.
 func (dt *DiscoveredTool) InputSchemaJSON() json.RawMessage {
+	if len(dt.Tool.RawInputSchema) > 0 {
+		return append(json.RawMessage(nil), dt.Tool.RawInputSchema...)
+	}
 	data, err := json.Marshal(dt.Tool.InputSchema)
 	if err != nil {
 		return json.RawMessage(`{"type":"object"}`)
@@ -53,10 +56,20 @@ type ServerConfig struct {
 
 // connection holds a live MCP client connection and its discovered tools.
 type connection struct {
-	client *client.Client
-	config ServerConfig
-	tools  []mcp.Tool
-	refs   int
+	client          *client.Client
+	config          ServerConfig
+	tools           []mcp.Tool
+	refs            int
+	toolsMu         sync.RWMutex
+	requestMu       sync.RWMutex
+	stopListener    context.CancelFunc
+	closeHTTP       func()
+	closeOnce       sync.Once
+	notifyMu        sync.RWMutex
+	onChange        func()
+	lifetime        context.Context
+	cancel          context.CancelFunc
+	refreshRequests chan struct{}
 
 	// reinitMu serializes session re-initialization attempts so concurrent
 	// callers that hit a terminated session don't stampede the server with
@@ -82,6 +95,9 @@ type Pool struct {
 
 	startOnce sync.Once
 	stopCh    chan struct{}
+	stopOnce  sync.Once
+	ctx       context.Context
+	cancel    context.CancelFunc
 
 	// onChange is called whenever the tool list changes (from any server).
 	onChange func()
@@ -89,17 +105,33 @@ type Pool struct {
 
 // NewPool creates a new MCP client pool.
 func NewPool() *Pool {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Pool{
 		conns:     make(map[string]*connection),
 		ephemeral: make(map[string]*connection),
 		desired:   make(map[string]ServerConfig),
 		stopCh:    make(chan struct{}),
+		ctx:       ctx, cancel: cancel,
 	}
 }
 
 // OnToolsChanged registers a callback that fires when any server's tool list changes.
 func (p *Pool) OnToolsChanged(fn func()) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.onChange = fn
+}
+
+func (p *Pool) notify() {
+	if p.ctx.Err() != nil {
+		return
+	}
+	p.mu.RLock()
+	fn := p.onChange
+	p.mu.RUnlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 // Connect establishes connections to all configured MCP servers,
@@ -108,7 +140,10 @@ func (p *Pool) OnToolsChanged(fn func()) {
 func (p *Pool) Connect(ctx context.Context, servers []ServerConfig) error {
 	for _, srv := range servers {
 		p.addDesired(srv)
-		if err := p.connectOne(ctx, srv); err != nil {
+		p.connectMu.Lock()
+		err := p.connectOne(ctx, srv)
+		p.connectMu.Unlock()
+		if err != nil {
 			slog.Error("failed to connect to MCP server", "name", srv.Name, "url", srv.URL, "error", err)
 			// Continue connecting to other servers; don't fail hard.
 			continue
@@ -120,96 +155,39 @@ func (p *Pool) Connect(ctx context.Context, servers []ServerConfig) error {
 
 // connectOne connects to a single MCP server.
 func (p *Pool) connectOne(ctx context.Context, srv ServerConfig) error {
-	transport := srv.Transport
-	if transport == "" {
-		transport = TransportSSE
-	}
-	slog.Info("connecting to MCP server", "name", srv.Name, "url", srv.URL, "transport", transport)
-
-	var c *client.Client
-	var err error
-
-	switch transport {
-	case TransportSSE:
-		var opts []mcptransport.ClientOption
-		if len(srv.Headers) > 0 {
-			opts = append(opts, client.WithHeaders(srv.Headers))
-		}
-		c, err = client.NewSSEMCPClient(srv.URL, opts...)
-	case TransportStreamableHTTP:
-		var opts []mcptransport.StreamableHTTPCOption
-		if len(srv.Headers) > 0 {
-			opts = append(opts, mcptransport.WithHTTPHeaders(srv.Headers))
-		}
-		c, err = client.NewStreamableHttpClient(srv.URL, opts...)
-	default:
-		return fmt.Errorf("unknown transport %q for server %s (use 'sse' or 'streamable-http')", transport, srv.Name)
-	}
-	if err != nil {
-		return fmt.Errorf("create %s client for %s: %w", transport, srv.Name, err)
-	}
-
-	conn := &connection{
-		client: c,
-		config: srv,
-	}
-
-	// Register notification handler before Start so we don't miss any.
-	serverName := srv.Name
-	c.OnNotification(func(notification mcp.JSONRPCNotification) {
-		if notification.Method == mcp.MethodNotificationToolsListChanged {
-			slog.Info("tool list changed notification received", "server", serverName)
-			p.refreshTools(serverName)
-		}
-	})
-
-	// Start the transport.
-	startCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(p.ctx, cancel)
+	defer stop()
 	defer cancel()
-
-	if err := c.Start(startCtx); err != nil {
-		c.Close()
-		return fmt.Errorf("start %s client for %s: %w", transport, srv.Name, err)
-	}
-
-	// Initialize the MCP session.
-	initCtx, initCancel := context.WithTimeout(ctx, 15*time.Second)
-	defer initCancel()
-	_, err = c.Initialize(initCtx, mcp.InitializeRequest{
-		Params: mcp.InitializeParams{
-			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
-			ClientInfo: mcp.Implementation{
-				Name:    "agentfoundry",
-				Version: "0.1.0",
-			},
-			Capabilities: mcp.ClientCapabilities{},
-		},
-	})
+	conn, err := openConnection(ctx, srv)
 	if err != nil {
-		c.Close()
-		return fmt.Errorf("initialize MCP session for %s: %w", srv.Name, err)
+		return fmt.Errorf("connect MCP server %s: %w", srv.Name, err)
 	}
-
-	// Discover tools.
-	toolsCtx, toolsCancel := context.WithTimeout(ctx, 15*time.Second)
-	defer toolsCancel()
-	toolsResult, err := c.ListTools(toolsCtx, mcp.ListToolsRequest{})
-	if err != nil {
-		c.Close()
-		return fmt.Errorf("list tools from %s: %w", srv.Name, err)
-	}
-
-	conn.tools = toolsResult.Tools
+	conn.onToolsChanged(p.notify)
 
 	p.mu.Lock()
+	if p.ctx.Err() != nil {
+		p.mu.Unlock()
+		conn.close()
+		return fmt.Errorf("MCP pool is closed")
+	}
+	old := p.conns[srv.Name]
+	conn.startListener()
 	p.conns[srv.Name] = conn
 	p.mu.Unlock()
+	if old != nil {
+		old.close()
+	}
 
-	toolNames := make([]string, len(conn.tools))
-	for i, t := range conn.tools {
+	tools := conn.getTools()
+	toolNames := make([]string, len(tools))
+	for i, t := range tools {
 		toolNames[i] = t.Name
 	}
-	slog.Info("connected to MCP server", "name", srv.Name, "tools", toolNames)
+	conn.requestMu.RLock()
+	version := conn.client.ProtocolVersion()
+	conn.requestMu.RUnlock()
+	slog.Info("connected to MCP server", "name", srv.Name, "protocol", version, "tools", toolNames)
 
 	return nil
 }
@@ -275,12 +253,12 @@ func (p *Pool) reconcile() {
 		}
 
 		p.connectMu.Lock()
-		err := p.connectOne(context.Background(), srv)
+		err := p.connectOne(p.ctx, srv)
 		p.connectMu.Unlock()
 		if err != nil {
 			slog.Warn("reconciler failed to connect to MCP server", "name", srv.Name, "error", err)
-		} else if p.onChange != nil {
-			p.onChange()
+		} else {
+			p.notify()
 		}
 	}
 }
@@ -294,28 +272,7 @@ func (p *Pool) refreshTools(serverName string) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	toolsResult, err := conn.client.ListTools(ctx, mcp.ListToolsRequest{})
-	if err != nil {
-		slog.Error("failed to refresh tools", "server", serverName, "error", err)
-		return
-	}
-
-	p.mu.Lock()
-	conn.tools = toolsResult.Tools
-	p.mu.Unlock()
-
-	toolNames := make([]string, len(toolsResult.Tools))
-	for i, t := range toolsResult.Tools {
-		toolNames[i] = t.Name
-	}
-	slog.Info("refreshed tools from server", "server", serverName, "tools", toolNames)
-
-	if p.onChange != nil {
-		p.onChange()
-	}
+	conn.refreshTools()
 }
 
 func (p *Pool) getConnection(name string) (*connection, bool) {
@@ -345,7 +302,7 @@ func (p *Pool) ListAllTools() []DiscoveredTool {
 
 	var all []DiscoveredTool
 	for name, conn := range p.allConnections() {
-		for _, t := range conn.tools {
+		for _, t := range conn.getTools() {
 			all = append(all, DiscoveredTool{
 				ServerName: name,
 				Tool:       t,
@@ -366,8 +323,9 @@ func (p *Pool) ListServerTools(serverName string) ([]DiscoveredTool, bool) {
 		return nil, false
 	}
 
-	tools := make([]DiscoveredTool, len(conn.tools))
-	for i, t := range conn.tools {
+	discovered := conn.getTools()
+	tools := make([]DiscoveredTool, len(discovered))
+	for i, t := range discovered {
 		tools[i] = DiscoveredTool{
 			ServerName: serverName,
 			Tool:       t,
@@ -387,7 +345,7 @@ func (p *Pool) GetTool(serverName, toolName string) (*DiscoveredTool, bool) {
 		return nil, false
 	}
 
-	for _, t := range conn.tools {
+	for _, t := range conn.getTools() {
 		if t.Name == toolName {
 			return &DiscoveredTool{
 				ServerName: serverName,
@@ -409,13 +367,16 @@ func (p *Pool) CallTool(ctx context.Context, serverName, toolName string, argume
 		return nil, fmt.Errorf("unknown MCP server: %s", serverName)
 	}
 
+	conn.requestMu.RLock()
 	result, err := conn.client.CallTool(ctx, mcp.CallToolRequest{
 		Params: mcp.CallToolParams{
 			Name:      toolName,
 			Arguments: arguments,
 		},
 	})
-	if err != nil && errors.Is(err, mcptransport.ErrSessionTerminated) {
+	modern := mcp.IsModernProtocol(conn.client.ProtocolVersion())
+	conn.requestMu.RUnlock()
+	if err != nil && !modern && errors.Is(err, mcptransport.ErrSessionTerminated) {
 		result, err = p.recoverFromTerminatedSession(ctx, conn, serverName, toolName, arguments, err)
 	}
 	if err != nil {
@@ -434,6 +395,8 @@ func (p *Pool) recoverFromTerminatedSession(ctx context.Context, conn *connectio
 
 	conn.reinitMu.Lock()
 	defer conn.reinitMu.Unlock()
+	conn.requestMu.Lock()
+	defer conn.requestMu.Unlock()
 
 	newTools, rerr := reinitSession(ctx, conn.client)
 	if rerr != nil {
@@ -441,12 +404,8 @@ func (p *Pool) recoverFromTerminatedSession(ctx context.Context, conn *connectio
 		return nil, rerr
 	}
 
-	p.mu.Lock()
-	changed := toolsChanged(conn.tools, newTools)
-	conn.tools = newTools
-	p.mu.Unlock()
-	if changed && p.onChange != nil {
-		p.onChange()
+	if conn.updateTools(newTools) {
+		p.notify()
 	}
 
 	slog.Info("MCP session re-initialized, retrying tool call", "server", serverName, "tool", toolName)
@@ -466,16 +425,7 @@ func reinitSession(ctx context.Context, cl *client.Client) ([]mcp.Tool, error) {
 	initCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	_, err := cl.Initialize(initCtx, mcp.InitializeRequest{
-		Params: mcp.InitializeParams{
-			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
-			ClientInfo: mcp.Implementation{
-				Name:    "agentfoundry",
-				Version: "0.1.0",
-			},
-			Capabilities: mcp.ClientCapabilities{},
-		},
-	})
+	err := negotiate(initCtx, cl)
 	if err != nil {
 		return nil, fmt.Errorf("re-initialize MCP session: %w", err)
 	}
@@ -490,21 +440,9 @@ func reinitSession(ctx context.Context, cl *client.Client) ([]mcp.Tool, error) {
 	return toolsResult.Tools, nil
 }
 
-// toolsChanged reports whether two tool lists differ by name.
+// toolsChanged includes schema and metadata changes, not just names.
 func toolsChanged(a, b []mcp.Tool) bool {
-	if len(a) != len(b) {
-		return true
-	}
-	names := make(map[string]bool, len(a))
-	for _, t := range a {
-		names[t.Name] = true
-	}
-	for _, t := range b {
-		if !names[t.Name] {
-			return true
-		}
-	}
-	return false
+	return !reflect.DeepEqual(a, b)
 }
 
 // ListServerNames returns the names of all connected servers (persistent + ephemeral).
@@ -524,83 +462,20 @@ func (p *Pool) ListServerNames() []string {
 // for use within a single agent run. It is not registered in the global Pool
 // and must be closed by the caller when the run completes.
 type EphemeralConn struct {
-	config ServerConfig
-	client *client.Client
-	tools  []mcp.Tool
+	*connection
 }
 
 // ConnectEphemeral connects to a single MCP server outside of the global pool
 // and returns an EphemeralConn. The caller is responsible for calling Close
 // when the connection is no longer needed.
 func ConnectEphemeral(ctx context.Context, srv ServerConfig) (*EphemeralConn, error) {
-	transport := srv.Transport
-	if transport == "" {
-		transport = TransportSSE
-	}
-
-	var c *client.Client
-	var err error
-
-	switch transport {
-	case TransportSSE:
-		var opts []mcptransport.ClientOption
-		if len(srv.Headers) > 0 {
-			opts = append(opts, client.WithHeaders(srv.Headers))
-		}
-		c, err = client.NewSSEMCPClient(srv.URL, opts...)
-	case TransportStreamableHTTP:
-		var opts []mcptransport.StreamableHTTPCOption
-		if len(srv.Headers) > 0 {
-			opts = append(opts, mcptransport.WithHTTPHeaders(srv.Headers))
-		}
-		c, err = client.NewStreamableHttpClient(srv.URL, opts...)
-	default:
-		return nil, fmt.Errorf("unknown transport %q for server %s (use 'sse' or 'streamable-http')", transport, srv.Name)
-	}
+	conn, err := openConnection(ctx, srv)
 	if err != nil {
-		return nil, fmt.Errorf("create %s client for %s: %w", transport, srv.Name, err)
+		return nil, err
 	}
-
-	startCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	if err := c.Start(startCtx); err != nil {
-		c.Close()
-		return nil, fmt.Errorf("start %s client for %s: %w", transport, srv.Name, err)
-	}
-
-	_, err = c.Initialize(ctx, mcp.InitializeRequest{
-		Params: mcp.InitializeParams{
-			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
-			ClientInfo: mcp.Implementation{
-				Name:    "agentfoundry",
-				Version: "0.1.0",
-			},
-			Capabilities: mcp.ClientCapabilities{},
-		},
-	})
-	if err != nil {
-		c.Close()
-		return nil, fmt.Errorf("initialize MCP session for %s: %w", srv.Name, err)
-	}
-
-	toolsResult, err := c.ListTools(ctx, mcp.ListToolsRequest{})
-	if err != nil {
-		c.Close()
-		return nil, fmt.Errorf("list tools from %s: %w", srv.Name, err)
-	}
-
-	toolNames := make([]string, len(toolsResult.Tools))
-	for i, t := range toolsResult.Tools {
-		toolNames[i] = t.Name
-	}
-	slog.Info("ephemeral MCP connection established", "name", srv.Name, "tools", toolNames)
-
-	return &EphemeralConn{
-		config: srv,
-		client: c,
-		tools:  toolsResult.Tools,
-	}, nil
+	conn.startListener()
+	slog.Info("ephemeral MCP connection established", "name", srv.Name, "protocol", conn.client.ProtocolVersion(), "tools", len(conn.getTools()))
+	return &EphemeralConn{connection: conn}, nil
 }
 
 // ServerName returns the name this server was registered under.
@@ -610,8 +485,9 @@ func (e *EphemeralConn) ServerName() string {
 
 // ListTools returns all tools discovered from this ephemeral server.
 func (e *EphemeralConn) ListTools() []DiscoveredTool {
-	tools := make([]DiscoveredTool, len(e.tools))
-	for i, t := range e.tools {
+	discovered := e.getTools()
+	tools := make([]DiscoveredTool, len(discovered))
+	for i, t := range discovered {
 		tools[i] = DiscoveredTool{
 			ServerName: e.config.Name,
 			Tool:       t,
@@ -622,19 +498,28 @@ func (e *EphemeralConn) ListTools() []DiscoveredTool {
 
 // CallTool invokes a tool on this ephemeral server.
 func (e *EphemeralConn) CallTool(ctx context.Context, toolName string, arguments map[string]any) (*mcp.CallToolResult, error) {
+	e.requestMu.RLock()
 	result, err := e.client.CallTool(ctx, mcp.CallToolRequest{
 		Params: mcp.CallToolParams{
 			Name:      toolName,
 			Arguments: arguments,
 		},
 	})
-	if err != nil && errors.Is(err, mcptransport.ErrSessionTerminated) {
+	modern := mcp.IsModernProtocol(e.client.ProtocolVersion())
+	e.requestMu.RUnlock()
+	if err != nil && !modern && errors.Is(err, mcptransport.ErrSessionTerminated) {
+		e.reinitMu.Lock()
+		defer e.reinitMu.Unlock()
+		e.requestMu.Lock()
+		defer e.requestMu.Unlock()
 		slog.Warn("ephemeral MCP session terminated, re-initializing", "server", e.config.Name, "tool", toolName, "error", err)
 		newTools, rerr := reinitSession(ctx, e.client)
 		if rerr != nil {
 			return nil, rerr
 		}
-		e.tools = newTools
+		if e.updateTools(newTools) {
+			e.notify()
+		}
 		result, err = e.client.CallTool(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
 				Name:      toolName,
@@ -651,19 +536,14 @@ func (e *EphemeralConn) CallTool(ctx context.Context, toolName string, arguments
 // Close shuts down the ephemeral MCP connection.
 func (e *EphemeralConn) Close() {
 	slog.Info("closing ephemeral MCP connection", "server", e.config.Name)
-	e.client.Close()
+	e.close()
 }
 
 // RegisterEphemeral adds an EphemeralConn to the pool under its server name.
 // Tools from the ephemeral connection become visible via ListAllTools and
 // CallTool. Call UnregisterEphemeral to remove it.
 func (p *Pool) RegisterEphemeral(e *EphemeralConn) error {
-	conn := &connection{
-		client: e.client,
-		config: e.config,
-		tools:  e.tools,
-		refs:   1,
-	}
+	conn := e.connection
 	p.mu.Lock()
 	if existing := p.ephemeral[e.config.Name]; existing != nil {
 		if !reflect.DeepEqual(existing.config, e.config) {
@@ -672,12 +552,17 @@ func (p *Pool) RegisterEphemeral(e *EphemeralConn) error {
 		}
 		existing.refs++
 		p.mu.Unlock()
-		e.Close()
+		if existing != conn {
+			e.Close()
+		}
 		return nil
 	}
+	conn.refs = 1
+	conn.onToolsChanged(p.notify)
 	p.ephemeral[e.config.Name] = conn
 	p.mu.Unlock()
-	slog.Info("registered ephemeral MCP server in pool", "name", e.config.Name, "tools", len(e.tools))
+	p.notify()
+	slog.Info("registered ephemeral MCP server in pool", "name", e.config.Name, "tools", len(e.getTools()))
 	return nil
 }
 
@@ -697,8 +582,9 @@ func (p *Pool) UnregisterEphemeral(name string) {
 	}
 	delete(p.ephemeral, name)
 	p.mu.Unlock()
-	conn.client.Close()
+	conn.close()
 	slog.Info("unregistered ephemeral MCP server from pool", "name", name)
+	p.notify()
 }
 
 // ConnectDynamic connects to an MCP server at runtime and adds it to the pool.
@@ -711,6 +597,9 @@ func (p *Pool) ConnectDynamic(ctx context.Context, srv ServerConfig) error {
 	err := p.connectOne(ctx, srv)
 	p.connectMu.Unlock()
 	p.startReconciler()
+	if err == nil {
+		p.notify()
+	}
 	return err
 }
 
@@ -727,30 +616,32 @@ func (p *Pool) DisconnectDynamic(name string) {
 	delete(p.conns, name)
 	p.mu.Unlock()
 
-	conn.client.Close()
+	conn.close()
 	slog.Info("disconnected dynamic MCP server", "name", name)
+	p.notify()
 }
 
 // ServerStatus describes whether a server is connected and what tools it has.
 type ServerStatus struct {
-	Connected bool
-	Tools     []mcp.Tool
+	Connected       bool
+	Tools           []mcp.Tool
+	ProtocolVersion string
 }
 
 // GetServerStatus returns the connection status and discovered tools for a
 // server by name. Checks persistent connections only (not ephemeral).
 func (p *Pool) GetServerStatus(name string) ServerStatus {
 	p.mu.RLock()
-	defer p.mu.RUnlock()
-
 	conn, ok := p.conns[name]
+	p.mu.RUnlock()
 	if !ok {
 		return ServerStatus{}
 	}
 
-	tools := make([]mcp.Tool, len(conn.tools))
-	copy(tools, conn.tools)
-	return ServerStatus{Connected: true, Tools: tools}
+	conn.requestMu.RLock()
+	version := conn.client.ProtocolVersion()
+	conn.requestMu.RUnlock()
+	return ServerStatus{Connected: true, Tools: conn.getTools(), ProtocolVersion: version}
 }
 
 // RefreshServer re-discovers tools from a specific server by name.
@@ -760,24 +651,22 @@ func (p *Pool) RefreshServer(name string) {
 
 // Close shuts down all MCP client connections.
 func (p *Pool) Close() {
-	select {
-	case <-p.stopCh:
-	default:
-		close(p.stopCh)
-	}
+	p.stopOnce.Do(func() { p.cancel(); close(p.stopCh) })
 
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	for name, conn := range p.ephemeral {
-		slog.Info("closing ephemeral MCP connection", "server", name)
-		conn.client.Close()
+	connections := make([]*connection, 0, len(p.conns)+len(p.ephemeral))
+	for _, conn := range p.conns {
+		connections = append(connections, conn)
 	}
-	for name, conn := range p.conns {
-		slog.Info("closing MCP client connection", "server", name)
-		conn.client.Close()
+	for _, conn := range p.ephemeral {
+		connections = append(connections, conn)
 	}
 	p.ephemeral = make(map[string]*connection)
 	p.conns = make(map[string]*connection)
 	p.desired = make(map[string]ServerConfig)
+	p.mu.Unlock()
+	for _, conn := range connections {
+		slog.Info("closing MCP connection", "server", conn.config.Name)
+		conn.close()
+	}
 }

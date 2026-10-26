@@ -3,6 +3,7 @@ package mcpclient
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -46,6 +47,18 @@ func newTestMCPServer(t *testing.T, killToolCall *atomic.Bool, initializeCount *
 			}
 			if bytes.Contains(body, []byte(`"initialize"`)) {
 				initializeCount.Add(1)
+			}
+			// Simulate an actual pre-2026 server, not the upgraded SDK's
+			// dual-era handler. Unknown discovery uses legacy JSON-RPC semantics.
+			var message struct {
+				ID     json.RawMessage `json:"id"`
+				Method string          `json:"method"`
+			}
+			json.Unmarshal(body, &message)
+			if message.Method == "server/discover" {
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": message.ID, "error": map[string]any{"code": -32601, "message": "Method not found"}})
+				return
 			}
 			if killToolCall.Load() && bytes.Contains(body, []byte(`"tools/call"`)) {
 				if !persistentKill {

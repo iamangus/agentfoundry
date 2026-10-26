@@ -1184,9 +1184,10 @@ type ContentBlock struct {
 }
 
 type mcpCallResponse struct {
-	Content       string         `json:"content"`
-	ContentBlocks []ContentBlock `json:"content_blocks,omitempty"`
-	IsError       bool           `json:"is_error"`
+	Content           string         `json:"content"`
+	ContentBlocks     []ContentBlock `json:"content_blocks,omitempty"`
+	IsError           bool           `json:"is_error"`
+	StructuredContent any            `json:"structured_content,omitempty"`
 }
 
 func (h *Handler) mcpProxyCall(w http.ResponseWriter, r *http.Request) {
@@ -1203,7 +1204,7 @@ func (h *Handler) mcpProxyCall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	content, blocks := extractMCPContent(result)
-	writeJSON(w, http.StatusOK, mcpCallResponse{Content: content, ContentBlocks: blocks, IsError: result.IsError})
+	writeJSON(w, http.StatusOK, mcpCallResponse{Content: content, ContentBlocks: blocks, IsError: result.IsError, StructuredContent: result.StructuredContent})
 }
 
 func extractMCPContent(result *mcp.CallToolResult) (string, []ContentBlock) {
@@ -1216,6 +1217,15 @@ func extractMCPContent(result *mcp.CallToolResult) (string, []ContentBlock) {
 			blocks = append(blocks, ContentBlock{Type: "text", Text: b.Text})
 		case mcp.ImageContent:
 			blocks = append(blocks, ContentBlock{Type: "image", Data: b.Data, MIMEType: b.MIMEType})
+		}
+	}
+	// Structured-only tool results must remain usable by existing workers,
+	// which consume text/content_blocks rather than the MCP wire envelope.
+	if len(parts) == 0 && result.StructuredContent != nil {
+		if data, err := json.Marshal(result.StructuredContent); err == nil {
+			text := string(data)
+			parts = append(parts, text)
+			blocks = append(blocks, ContentBlock{Type: "text", Text: text})
 		}
 	}
 	return strings.Join(parts, "\n"), blocks
