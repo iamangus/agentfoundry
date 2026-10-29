@@ -182,7 +182,7 @@ func main() {
 
 	providerStore := store.NewProviderStore(dbPool.Pool)
 
-	apiHandler := api.NewHandler(reg, pool, definitionStore, temporalClient, streams, sessions, keyStore, mcpStore, runs, providerStore, authCfg.InternalAPIKey)
+	apiHandler := api.NewHandler(reg, pool, definitionStore, temporalClient, streams, sessions, keyStore, mcpStore, runs, providerStore, store.NewInferenceStore(dbPool.Pool), authCfg.InternalAPIKey)
 	apiHandler.RegisterRoutes(mux)
 	for _, sess := range sessions.List() {
 		if sess.ActiveRunID == "" {
