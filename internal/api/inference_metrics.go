@@ -24,6 +24,7 @@ type inferenceObserver struct {
 	started                             time.Time
 	firstToken, lastToken, firstVisible time.Time
 	finished                            bool
+	streamDone                          bool
 }
 
 func newInferenceObserver(r *http.Request, agentID, providerID, model string, backup bool) *inferenceObserver {
@@ -58,6 +59,7 @@ func newInferenceObserver(r *http.Request, agentID, providerID, model string, ba
 func (o *inferenceObserver) observe(data []byte, streaming bool) {
 	if string(data) == "[DONE]" {
 		o.finished = true
+		o.streamDone = true
 		return
 	}
 	var frame struct {
@@ -168,10 +170,10 @@ func (h *Handler) finishInference(r *http.Request, o *inferenceObserver) {
 	o.record.FinishedAt = time.Now().UTC()
 	m := &o.record.Metrics
 	m.DurationMS = float64(time.Since(o.started)) / float64(time.Millisecond)
-	if r.Context().Err() != nil {
-		o.record.Status = "canceled"
-	} else if o.finished && o.record.HTTPStatus == 200 && o.record.Status != "provider_error" {
+	if o.finished && o.record.HTTPStatus == 200 && o.record.Status != "provider_error" {
 		o.record.Status = "completed"
+	} else if r.Context().Err() != nil && o.record.Status != "provider_error" {
+		o.record.Status = "canceled"
 	}
 	if !o.firstToken.IsZero() {
 		v := float64(o.firstToken.Sub(o.started)) / float64(time.Millisecond)

@@ -26,6 +26,8 @@ import (
 	"github.com/angoo/agentfoundry/internal/temporal"
 )
 
+var authExemptPaths = []string{"/health", "/servers/", "/api/v1/inference/agents/"}
+
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
@@ -287,7 +289,7 @@ func main() {
 
 	var handler http.Handler = mux
 	if authMW != nil {
-		handler = authMW.Handler("/health", "/servers/", "/api/v1/inference/")(mux)
+		handler = authMW.Handler(authExemptPaths...)(mux)
 	}
 
 	server := &http.Server{
