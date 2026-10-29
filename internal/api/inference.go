@@ -127,6 +127,18 @@ func (h *Handler) inferenceProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	observer := newInferenceObserver(r, agentID, providerID, model, backup)
+	if observer.record.RunID != "" && h.runs != nil {
+		if ru, ok := h.runs.Get(observer.record.RunID); ok {
+			observer.record.InputID = r.Header.Get("X-AgentFoundry-Input-ID")
+			if observer.record.InputID == "" || len(observer.record.InputID) > 256 {
+				observer.record.InputID = ru.CurrentInputID
+			}
+		} else {
+			observer.record.RunID = ""
+		}
+	}
+	defer h.finishInference(r, observer)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		slog.Error("failed to proxy inference request", "provider", prov.Name, "error", err)
@@ -134,6 +146,7 @@ func (h *Handler) inferenceProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	observer.record.HTTPStatus = resp.StatusCode
 
 	for k, vv := range resp.Header {
 		for _, v := range vv {
@@ -166,6 +179,7 @@ func (h *Handler) inferenceProxy(w http.ResponseWriter, r *http.Request) {
 
 			if strings.HasPrefix(line, "data: ") {
 				data := strings.TrimPrefix(line, "data: ")
+				observer.observe([]byte(data), true)
 				if data != "[DONE]" {
 					var chunk inferenceStreamChunk
 					if err := json.Unmarshal([]byte(data), &chunk); err == nil {
@@ -216,10 +230,14 @@ func (h *Handler) inferenceProxy(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			w.Write([]byte(line + "\n"))
+			if _, err := w.Write([]byte(line + "\n")); err != nil {
+				observer.finished = false
+				break
+			}
 			flusher.Flush()
 		}
 		if err := scanner.Err(); err != nil {
+			observer.finished = false
 			if errors.Is(err, context.Canceled) {
 				// The client closed the stream (e.g. the worker moved on to
 				// handle tool calls). This is expected, not an error.
@@ -229,7 +247,9 @@ func (h *Handler) inferenceProxy(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else {
-		io.Copy(w, resp.Body)
+		if err := copyInferenceResponse(w, resp.Body, observer); err != nil {
+			slog.Warn("inference response interrupted", "error", err)
+		}
 	}
 }
 

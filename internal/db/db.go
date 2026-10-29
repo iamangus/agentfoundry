@@ -43,6 +43,12 @@ func NewPool(ctx context.Context, dbURL string) (*Pool, error) {
 
 func (p *Pool) Migrate(ctx context.Context) error {
 	migrations := []string{
+		`CREATE TABLE IF NOT EXISTS inference_attempts (
+			id TEXT PRIMARY KEY, run_id TEXT NOT NULL DEFAULT '', input_id TEXT NOT NULL DEFAULT '',
+			agent_id TEXT NOT NULL, provider_id TEXT NOT NULL, started_at TIMESTAMPTZ NOT NULL, payload JSONB NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_inference_attempts_run_input ON inference_attempts (run_id,input_id,started_at DESC,id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_inference_attempts_provider ON inference_attempts (provider_id,started_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS api_keys (
 			id            TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
 			name          TEXT NOT NULL,
