@@ -174,11 +174,26 @@ func TestProviderMetricsRefusesRedirectsAndOversizedResponses(t *testing.T) {
 	}
 }
 
-func TestInferenceMissingUsageAndCancellation(t *testing.T) {
+func TestInferenceCompletionSurvivesClientCloseAfterDone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	r := httptest.NewRequest("POST", "/", nil).WithContext(ctx)
 	o := newInferenceObserver(r, "a", "p", "m", false)
 	o.observe([]byte(`{"choices":[{"delta":{"content":"hello"},"finish_reason":"stop"}]}`), true)
+	o.observe([]byte(`[DONE]`), true)
+	o.record.HTTPStatus = 200
+	cancel()
+	h := &Handler{inferenceStore: &memoryInference{}}
+	h.finishInference(r, o)
+	if !o.streamDone || o.record.Status != "completed" {
+		t.Fatalf("completed response misclassified: %+v", o.record)
+	}
+}
+
+func TestInferenceMissingUsageAndCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	r := httptest.NewRequest("POST", "/", nil).WithContext(ctx)
+	o := newInferenceObserver(r, "a", "p", "m", false)
+	o.observe([]byte(`{"choices":[{"delta":{"content":"hello"}}]}`), true)
 	o.record.HTTPStatus = 200
 	cancel()
 	s := &memoryInference{}

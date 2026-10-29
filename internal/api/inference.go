@@ -230,14 +230,23 @@ func (h *Handler) inferenceProxy(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
+			if observer.streamDone {
+				line += "\n"
+			}
 			if _, err := w.Write([]byte(line + "\n")); err != nil {
 				observer.finished = false
+				observer.streamDone = false
 				break
 			}
 			flusher.Flush()
+			if observer.streamDone {
+				break
+			}
 		}
 		if err := scanner.Err(); err != nil {
-			observer.finished = false
+			if !observer.streamDone {
+				observer.finished = false
+			}
 			if errors.Is(err, context.Canceled) {
 				// The client closed the stream (e.g. the worker moved on to
 				// handle tool calls). This is expected, not an error.
