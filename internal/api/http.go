@@ -53,10 +53,15 @@ type Handler struct {
 	mcpStore       *auth.MCPServerStore
 	runs           *run.Store
 	providerStore  *store.ProviderStore
-	internalAPIKey string
+	inferenceStore interface {
+		Save(context.Context, store.InferenceAttempt) error
+		List(context.Context, string, string, string) (store.InferencePage, error)
+	}
+	providerMetrics providerMetricCache
+	internalAPIKey  string
 }
 
-func NewHandler(reg *registry.Registry, pool *mcpclient.Pool, store DefinitionStore, temporalClient *temporal.Client, streams *stream.Manager, sessions *session.Store, keyStore *auth.APIKeyStore, mcpStore *auth.MCPServerStore, runs *run.Store, providerStore *store.ProviderStore, internalAPIKey string) *Handler {
+func NewHandler(reg *registry.Registry, pool *mcpclient.Pool, store DefinitionStore, temporalClient *temporal.Client, streams *stream.Manager, sessions *session.Store, keyStore *auth.APIKeyStore, mcpStore *auth.MCPServerStore, runs *run.Store, providerStore *store.ProviderStore, inferenceStore *store.InferenceStore, internalAPIKey string) *Handler {
 	return &Handler{
 		store:          store,
 		reg:            reg,
@@ -68,6 +73,7 @@ func NewHandler(reg *registry.Registry, pool *mcpclient.Pool, store DefinitionSt
 		mcpStore:       mcpStore,
 		runs:           runs,
 		providerStore:  providerStore,
+		inferenceStore: inferenceStore,
 		internalAPIKey: internalAPIKey,
 	}
 }
@@ -89,6 +95,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/runs/{id}", h.getRunStatus)
 	mux.HandleFunc("GET /api/v1/runs/{id}/inputs/{inputID}", h.getRunInputStatus)
 	mux.HandleFunc("GET /api/v1/runs/{id}/trace", h.getRunTrace)
+	mux.HandleFunc("GET /api/v1/runs/{id}/inference", h.getRunInference)
+	mux.HandleFunc("GET /api/v1/inference/providers", h.getProviderInference)
 	mux.HandleFunc("POST /api/v1/runs/{id}/inputs", h.submitPersistentInput)
 	mux.HandleFunc("POST /api/v1/runs/{id}/cancel", h.cancelRun)
 	mux.HandleFunc("GET /api/v1/runs/{id}/events", h.runEvents)
