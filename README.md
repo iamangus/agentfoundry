@@ -136,10 +136,51 @@ team: engineering     # required when scope is "team"
 | `GET` | `/api/v1/providers` | List providers visible to the authenticated user |
 | `POST` | `/api/v1/providers` | Create an inference provider (scope: `user`/`team`/`global`) |
 | `GET` | `/api/v1/providers/{name}` | Get provider details (API key masked) |
-| `PUT` | `/api/v1/providers/{name}` | Update provider |
-| `DELETE` | `/api/v1/providers/{name}` | Delete provider |
+| `PUT` | `/api/v1/providers/{id}` | Update provider |
+| `DELETE` | `/api/v1/providers/{id}` | Delete provider |
+| `GET` | `/api/v1/providers/{id}/models` | Discover models using a visible provider's saved credentials |
+| `POST` | `/api/v1/models/discover` | Discover models before saving a provider |
 
 Providers are referenced by agents via `provider_id`. When used, the worker's LLM calls route through the orchestrator's inference proxy at `/api/v1/inference/agents/{agentID}/chat/completions`, which injects the provider's credentials server-side.
+
+Model discovery accepts OpenAI-compatible catalogs (OpenAI, OpenRouter, DeepSeek,
+Ollama's `/v1`, llama-server, and compatible custom endpoints), plus Anthropic's
+paginated catalog. Draft discovery accepts `provider_type`, `base_url`, `api_key`,
+and `headers`; include `id` when editing to reuse masked credentials at the same
+saved URL. Discovery is authenticated, time-bounded, and never follows redirects
+with credentials. Unsupported catalogs do not prevent manual model entry.
+
+DeepSeek is available as `provider_type: "deepseek"`, with default base URL
+`https://api.deepseek.com` and Bearer authentication. Use live model discovery
+instead of hard-coded model names. The UI defaults schema validation off for
+DeepSeek so structured output uses JSON mode and schema instructions. The worker
+preserves `reasoning_content` across streaming and non-streaming tool turns;
+deploy the updated worker alongside Foundry and the UI. DeepSeek model parameters
+can include provider-specific JSON such as `{"thinking":{"type":"disabled"}}`.
+
+### Inference Profiles
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/v1/inference-profiles` | List visible routing templates |
+| `POST` | `/api/v1/inference-profiles` | Create a routing template |
+| `PUT` | `/api/v1/inference-profiles/{id}` | Replace a routing template |
+| `DELETE` | `/api/v1/inference-profiles/{id}` | Delete a routing template |
+
+Profiles contain `name`, `provider_id`, `model`, optional `backup_provider_id` and
+`backup_model`, and `scope` (`user`, `team`, or `global`) / `team`. Blank models
+resolve to explicit provider defaults when the profile is saved. Both providers
+must be accessible to the profile's scope. Personal profiles are owner-editable;
+team profiles require a team administrator in that team; global profiles require
+a global administrator to manage. Providers referenced by profiles cannot be
+deleted until those profiles are updated or removed.
+
+The UI offers an Inference profiles page and Apply profile / Save as profile in
+the agent editor. **Copy-on-apply:** applying only updates the agent draft; saving
+persists the ordinary routing fields in a new agent version. No profile ID is
+stored on the agent, and editing/deleting a profile never changes agents that
+previously used it. Switching the primary provider/model via a profile clears
+old primary tuning to avoid carrying incompatible settings to another model.
 
 ### Tools & Status
 

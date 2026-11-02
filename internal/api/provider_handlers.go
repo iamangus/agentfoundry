@@ -2,11 +2,14 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/angoo/agentfoundry/internal/auth"
 	"github.com/angoo/agentfoundry/internal/store"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type createProviderRequest struct {
@@ -68,6 +71,7 @@ func (h *Handler) createProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	req.BaseURL = providerBaseURL(req.ProviderType, req.BaseURL)
 	rec, err := h.providerStore.Create(r.Context(), req.Name, req.ProviderType, req.BaseURL, req.APIKey, req.DefaultModel, req.SchemaValidation, scope, req.Team, ac.Subject, req.Headers, req.Reasoning)
 	if err != nil {
 		slog.Error("failed to create provider", "name", req.Name, "error", err)
@@ -151,7 +155,13 @@ func (h *Handler) updateProvider(w http.ResponseWriter, r *http.Request) {
 	if req.APIKey == "***" || req.APIKey == "" {
 		req.APIKey = existing.APIKey
 	}
+	for key, value := range req.Headers {
+		if value == "***" {
+			req.Headers[key] = existing.Headers[key]
+		}
+	}
 
+	req.BaseURL = providerBaseURL(req.ProviderType, req.BaseURL)
 	rec, err := h.providerStore.Update(r.Context(), id, req.Name, req.ProviderType, req.BaseURL, req.APIKey, req.DefaultModel, req.SchemaValidation, req.Scope, req.Team, req.Headers, req.Reasoning)
 	if err != nil {
 		slog.Error("failed to update provider", "id", id, "error", err)
@@ -189,6 +199,11 @@ func (h *Handler) deleteProvider(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.providerStore.Delete(r.Context(), id); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "provider is used by an inference profile; update or delete those profiles first"})
+			return
+		}
 		slog.Error("failed to delete provider", "id", id, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -199,7 +214,7 @@ func (h *Handler) deleteProvider(w http.ResponseWriter, r *http.Request) {
 
 func maskProvider(rec *store.ProviderRecord) *store.ProviderRecord {
 	for k := range rec.Headers {
-		if k == "api-key" || k == "authorization" {
+		if strings.EqualFold(k, "api-key") || strings.EqualFold(k, "authorization") || strings.EqualFold(k, "x-api-key") {
 			rec.Headers[k] = "***"
 		}
 	}
