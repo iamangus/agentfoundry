@@ -141,6 +141,20 @@ func (p *Pool) Migrate(ctx context.Context) error {
 		)`,
 		`ALTER TABLE inference_providers ADD COLUMN IF NOT EXISTS reasoning JSONB DEFAULT '{}'`,
 		`CREATE INDEX IF NOT EXISTS idx_inference_providers_scope ON inference_providers (scope, team)`,
+		`CREATE TABLE IF NOT EXISTS inference_profiles (
+			id TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+			name TEXT NOT NULL,
+			provider_id TEXT NOT NULL REFERENCES inference_providers(id) ON DELETE RESTRICT,
+			model TEXT NOT NULL,
+			backup_provider_id TEXT REFERENCES inference_providers(id) ON DELETE RESTRICT,
+			backup_model TEXT NOT NULL DEFAULT '',
+			scope TEXT NOT NULL DEFAULT 'user' CHECK (scope IN ('user', 'team', 'global')),
+			team TEXT NOT NULL DEFAULT '',
+			created_by TEXT NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_inference_profiles_scope ON inference_profiles (scope, team, created_by)`,
 		`CREATE TABLE IF NOT EXISTS agent_runs (
 			id TEXT PRIMARY KEY,
 			agent_name TEXT NOT NULL,

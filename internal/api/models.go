@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/angoo/agentfoundry/internal/auth"
 	"github.com/angoo/agentfoundry/internal/store"
 )
 
@@ -98,6 +99,11 @@ func storeModelCache(key string, result *modelCapabilitiesResponse) {
 }
 
 func (h *Handler) getModelCapabilities(w http.ResponseWriter, r *http.Request) {
+	ac := auth.FromContext(r)
+	if ac == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
 	modelID := r.URL.Query().Get("model")
 	if modelID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "model is required"})
@@ -108,14 +114,14 @@ func (h *Handler) getModelCapabilities(w http.ResponseWriter, r *http.Request) {
 	var prov *store.ProviderRecord
 	if pid := r.URL.Query().Get("provider_id"); pid != "" {
 		var err error
-		prov, err = h.providerStore.GetByID(r.Context(), pid)
+		prov, err = h.visibleProvider(r, pid)
 		if err != nil {
 			slog.Error("model capabilities: provider not found", "provider_id", pid, "error", err)
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "provider not found"})
 			return
 		}
 	} else {
-		provs, err := h.providerStore.ListAll(r.Context())
+		provs, err := h.providerStore.List(r.Context(), ac.Subject, ac.Teams, ac.IsGlobalAdmin)
 		if err != nil {
 			slog.Error("failed to list providers for model capabilities", "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list providers"})
@@ -134,13 +140,13 @@ func (h *Handler) getModelCapabilities(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	baseURL := prov.BaseURL
-	if baseURL == "" {
-		baseURL = "https://openrouter.ai/api/v1"
-	}
-	baseURL = strings.TrimRight(baseURL, "/")
+	baseURL := providerBaseURL(prov.ProviderType, prov.BaseURL)
 
 	switch prov.ProviderType {
+	case "deepseek":
+		// DeepSeek has a model catalog, but not OpenRouter's sampling metadata
+		// or llama.cpp's /props. Keep tuning provider-specific, not model-name based.
+		writeJSON(w, http.StatusOK, modelCapabilitiesResponse{SupportedParameters: []string{"max_tokens", "temperature", "top_p"}, DefaultParameters: json.RawMessage(`{}`)})
 	case "llama-server":
 		h.capsFromLlamaProps(w, r, prov, baseURL)
 	case "openrouter":

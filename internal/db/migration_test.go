@@ -42,7 +42,7 @@ func TestMigrateEmptyDatabaseAndRepeat(t *testing.T) {
 			t.Fatalf("migration pass %d: %v", i+1, err)
 		}
 	}
-	for _, table := range []string{"agent_definitions", "inference_providers", "agent_runs", "agent_run_inputs", "chat_sessions"} {
+	for _, table := range []string{"agent_definitions", "inference_providers", "inference_profiles", "agent_runs", "agent_run_inputs", "chat_sessions"} {
 		var found string
 		if err := pool.QueryRow(ctx, `SELECT to_regclass($1)::text`, schema+"."+table).Scan(&found); err != nil || found == "" {
 			t.Fatalf("table %s missing: %q, %v", table, found, err)

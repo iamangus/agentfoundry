@@ -105,6 +105,9 @@ func (h *Handler) inferenceProxy(w http.ResponseWriter, r *http.Request) {
 		params = nil
 	}
 	bodyBytes, err = prepareInferencePayload(bodyBytes, model, prov.SchemaValidation, prov.Reasoning, params)
+	if err == nil && prov.ProviderType == "deepseek" {
+		bodyBytes, err = prepareDeepSeekHistory(bodyBytes)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -231,6 +234,34 @@ func (h *Handler) inferenceProxy(w http.ResponseWriter, r *http.Request) {
 	} else {
 		io.Copy(w, resp.Body)
 	}
+}
+
+// DeepSeek thinking mode requires the reasoning_content field on previous
+// assistant messages when tools are used. History from a different provider
+// (e.g. after failover) has no reasoning to replay; send an empty field rather
+// than inventing content or dropping the conversation's tool-call history.
+func prepareDeepSeekHistory(body []byte) ([]byte, error) {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
+	var messages []map[string]json.RawMessage
+	if err := json.Unmarshal(payload["messages"], &messages); err != nil {
+		return nil, err
+	}
+	for _, message := range messages {
+		if string(message["role"]) == `"assistant"` {
+			if reasoning, ok := message["reasoning_content"]; !ok || string(reasoning) == "null" {
+				message["reasoning_content"] = json.RawMessage(`""`)
+			}
+		}
+	}
+	encoded, err := json.Marshal(messages)
+	if err != nil {
+		return nil, err
+	}
+	payload["messages"] = encoded
+	return json.Marshal(payload)
 }
 
 func isNonEmptyJSON(raw json.RawMessage) bool {

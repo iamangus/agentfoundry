@@ -35,3 +35,28 @@ func TestInferencePayloadRoutingAndSchemaCompatibility(t *testing.T) {
 		}
 	}
 }
+
+func TestDeepSeekHistoryPreservesReasoningAndAcceptsFailoverHistory(t *testing.T) {
+	body := []byte(`{"model":"live-model","messages":[{"role":"user","content":"help"},{"role":"assistant","content":"answer","reasoning_content":"original"},{"role":"assistant","tool_calls":[{"id":"one"}]},{"role":"tool","tool_call_id":"one","content":"result"}],"tools":[{"type":"function"}]}`)
+	result, err := prepareDeepSeekHistory(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(result, &payload); err != nil {
+		t.Fatal(err)
+	}
+	messages := payload["messages"].([]any)
+	if messages[1].(map[string]any)["reasoning_content"] != "original" {
+		t.Fatal("lost original reasoning")
+	}
+	if reasoning, ok := messages[2].(map[string]any)["reasoning_content"]; !ok || reasoning != "" {
+		t.Fatal("missing empty reasoning field for non-DeepSeek history")
+	}
+	if _, ok := messages[0].(map[string]any)["reasoning_content"]; ok {
+		t.Fatal("added reasoning to user")
+	}
+	if payload["tools"] == nil || messages[2].(map[string]any)["tool_calls"] == nil {
+		t.Fatal("lost tool history")
+	}
+}

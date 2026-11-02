@@ -123,6 +123,12 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/providers/{id}", h.deleteProvider)
 
 	mux.HandleFunc("GET /api/v1/models/capabilities", h.getModelCapabilities)
+	mux.HandleFunc("POST /api/v1/models/discover", h.discoverModels)
+	mux.HandleFunc("GET /api/v1/providers/{id}/models", h.listProviderModels)
+	mux.HandleFunc("GET /api/v1/inference-profiles", h.listInferenceProfiles)
+	mux.HandleFunc("POST /api/v1/inference-profiles", h.saveInferenceProfile)
+	mux.HandleFunc("PUT /api/v1/inference-profiles/{id}", h.saveInferenceProfile)
+	mux.HandleFunc("DELETE /api/v1/inference-profiles/{id}", h.deleteInferenceProfile)
 
 	mux.HandleFunc("POST /api/v1/inference/agents/{agentID}/chat/completions", h.inferenceProxy)
 
